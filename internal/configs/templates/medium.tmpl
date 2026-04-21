@@ -1,0 +1,276 @@
+Building configuration...
+
+Current configuration : {{.FileSizeHint}} bytes
+!
+! Last configuration change at {{.Clock}}
+!
+version 15.5
+service nagle
+service timestamps debug datetime msec localtime show-timezone
+service timestamps log datetime msec localtime show-timezone
+service password-encryption
+service sequence-numbers
+service internal
+no service pad
+no service finger
+!
+hostname {{.Hostname}}
+!
+boot-start-marker
+boot system flash:/c2900-universalk9-mz.SPA.155-3.M7.bin
+boot-end-marker
+!
+logging buffered 32768 informational
+logging console critical
+logging monitor informational
+!
+{{range .VRFs -}}
+vrf definition {{.Name}}
+ rd {{.RD}}
+ address-family ipv4
+{{range .RTImport}}  route-target import {{.}}
+{{end}}{{range .RTExport}}  route-target export {{.}}
+{{end}}  exit-address-family
+!
+{{end -}}
+enable secret 5 {{.EnableSecret}}
+!
+{{range .Users -}}
+username {{.Name}} privilege {{.Privilege}} secret 5 {{.SecretHash}}
+{{end -}}
+!
+aaa new-model
+aaa group server tacacs+ ACS
+{{range .TACACSServers}} server-private {{.}} key 7 {{$.TACACSKey}}
+{{end -}}
+aaa authentication login default group ACS local
+aaa authentication enable default group ACS enable
+aaa authorization exec default group ACS local
+aaa authorization commands 15 default group ACS local
+aaa accounting exec default start-stop group ACS
+aaa accounting commands 15 default start-stop group ACS
+aaa session-id common
+!
+clock timezone UTC 0 0
+!
+ip vrf receive MGMT
+no ip source-route
+ip cef
+no ip domain-lookup
+ip domain-name {{.DomainName}}
+{{range .NameServers -}}
+ip name-server {{.}}
+{{end -}}
+!
+ip ssh version 2
+ip ssh authentication-retries 3
+ip ssh time-out 60
+ip ssh server algorithm encryption aes256-ctr aes192-ctr aes128-ctr
+no ip http server
+no ip http secure-server
+!
+{{range .VLANs -}}
+vlan {{.ID}}
+ name {{.Name}}
+!
+{{end -}}
+{{range .Interfaces -}}
+interface {{.Name}}
+{{- if .Description}}
+ description {{.Description}}{{end}}
+{{- if .VRF}}
+ vrf forwarding {{.VRF}}{{end}}
+{{- if eq .Mode "routed"}}
+ ip address {{.IPAddress}} {{.Netmask}}
+ ip verify unicast source reachable-via rx
+ no ip proxy-arp
+ no ip redirects
+ no ip unreachables
+{{- if .OSPFArea}}
+ ip ospf {{.OSPFArea}} area {{.OSPFArea}}{{end}}
+{{- if .OSPFCost}}
+ ip ospf cost {{.OSPFCost}}{{end}}
+{{- if .HSRPIP}}
+ standby version 2
+ standby {{.HSRPGroup}} ip {{.HSRPIP}}
+ standby {{.HSRPGroup}} priority {{.HSRPPriority}}
+ standby {{.HSRPGroup}} preempt{{end}}
+{{- if .ServicePolicyOut}}
+ service-policy output {{.ServicePolicyOut}}{{end}}
+{{- if .ACLIn}}
+ ip access-group {{.ACLIn}} in{{end}}
+ load-interval 30
+ bfd interval 300 min_rx 300 multiplier 3
+{{- else if eq .Mode "trunk"}}
+ switchport mode trunk
+ switchport trunk encapsulation dot1q
+ switchport trunk native vlan {{.VLAN}}
+ switchport trunk allowed vlan {{.AllowedVLANsStr}}
+{{- else}}
+ switchport mode access
+ switchport access vlan {{.VLAN}}{{end}}
+{{- if .Shutdown}}
+ shutdown
+{{- else}}
+ no shutdown
+{{- end}}
+!
+{{end -}}
+{{range .Subinterfaces -}}
+interface {{.Name}}
+ description {{.Description}}
+ encapsulation dot1Q {{.EncapVLAN}}
+{{- if .VRF}}
+ vrf forwarding {{.VRF}}
+{{- end}}
+ ip address {{.IPAddress}} {{.Netmask}}
+ no ip redirects
+{{- if .HSRPIP}}
+ standby {{.HSRPGroup}} ip {{.HSRPIP}}
+ standby {{.HSRPGroup}} preempt
+{{- end}}
+ no shutdown
+!
+{{end -}}
+{{if .OSPF -}}
+router ospf {{.OSPF.ID}}
+ router-id {{.OSPF.RouterID}}
+{{- range .OSPF.Areas}}
+ area {{.ID}} {{.Type}}
+{{- end}}
+{{- range .OSPF.Networks}}
+ network {{.Network}} {{.Wildcard}} area {{.Area}}
+{{- end}}
+{{- range .OSPF.Redistribute}}
+ redistribute {{.}}
+{{- end}}
+{{- range .OSPF.PassiveIfs}}
+ passive-interface {{.}}
+{{- end}}
+!
+{{end -}}
+{{range $pl := .PrefixLists -}}
+!
+ip prefix-list {{$pl.Name}} description {{$pl.Description}}
+{{range $pl.Entries -}}
+ip prefix-list {{$pl.Name}} seq {{.Seq}} {{.Action}} {{.Prefix}} ge {{.GE}} le {{.LE}}
+{{end -}}
+{{end -}}
+!
+{{range $rm := .RouteMaps -}}
+{{range $rm.Entries -}}
+route-map {{$rm.Name}} {{.Action}} {{.Seq}}
+{{range .Match}} match {{.}}
+{{end -}}
+{{range .Set}} set {{.}}
+{{end -}}
+!
+{{end -}}
+{{end -}}
+{{range .ACLs -}}
+ip access-list extended {{.Name}}
+ remark {{.Remark}}
+{{- range .Entries}}
+ {{.Seq}} {{.Action}} {{.Protocol}} {{.Source}} {{.Dest}}{{if .Extra}} {{.Extra}}{{end}}
+{{- end}}
+!
+{{end -}}
+{{range .StaticRoutes -}}
+ip route{{if .VRF}} vrf {{.VRF}}{{end}} {{.Network}} {{.Mask}} {{.NextHop}}{{if .AD}} {{.AD}}{{end}}{{if .Name}} name {{.Name}}{{end}}
+{{end -}}
+!
+{{if .IncludeCrypto -}}
+crypto isakmp policy 10
+ encr aes 256
+ authentication pre-share
+ group 14
+ lifetime 28800
+crypto isakmp keepalive 30 10
+!
+crypto ipsec transform-set AES256-SHA esp-aes 256 esp-sha-hmac
+ mode tunnel
+!
+{{range .CryptoMaps -}}
+crypto map {{.Name}} {{.Seq}} ipsec-isakmp
+ set peer {{.PeerIP}}
+ set transform-set {{.TransformSet}}
+ set pfs {{.PFS}}
+ match address {{.ACL}}
+{{end -}}
+!
+{{end -}}
+{{if .IncludeQoS -}}
+{{range .QoSClassMaps -}}
+class-map match-any {{.Name}}
+{{range .Match}} match {{.}}
+{{end -}}
+!
+{{end -}}
+{{range .QoSPolicyMaps -}}
+policy-map {{.Name}}
+{{- range .Classes}}
+ class {{.Name}}
+{{- if .Priority}}
+  priority percent {{.Priority}}{{end}}
+{{- if .Bandwidth}}
+  bandwidth percent {{.Bandwidth}}{{end}}
+{{- if .MarkingDSCP}}
+  set dscp {{.MarkingDSCP}}{{end}}
+{{- if .PoliceBPS}}
+  police {{.PoliceBPS}} 8000 8000 conform-action transmit exceed-action drop{{end}}
+{{- end}}
+!
+{{end -}}
+{{end -}}
+ip sla 1
+ icmp-echo {{.MgmtIP}} source-interface Loopback0
+ frequency 10
+ip sla schedule 1 life forever start-time now
+!
+track 1 ip sla 1
+!
+snmp-server community {{.SNMPCommunityRO}} RO
+snmp-server community {{.SNMPCommunityRW}} RW
+snmp-server location {{.SNMPLocation}}
+snmp-server contact {{.SNMPContact}}
+snmp-server enable traps snmp authentication linkdown linkup coldstart warmstart
+snmp-server enable traps ospf state-change
+snmp-server enable traps bgp
+snmp-server enable traps config
+snmp-server enable traps entity
+snmp-server enable traps flash insertion removal
+snmp-server host 10.0.0.10 version 2c {{.SNMPCommunityRO}}
+!
+{{range .LoggingHosts -}}
+logging host {{.}}
+{{end -}}
+logging trap informational
+logging source-interface Loopback0
+!
+{{range .NTPServers -}}
+ntp server {{.}}
+{{end -}}
+!
+banner motd ^C
+{{range .BannerMOTD}}{{.}}
+{{end -}}^C
+!
+line con 0
+ exec-timeout 10 0
+ login authentication default
+ logging synchronous
+ transport output none
+line aux 0
+ exec-timeout 0 1
+ no exec
+ transport output none
+line vty 0 4
+ exec-timeout 10 0
+ login authentication default
+ transport input ssh
+line vty 5 15
+ exec-timeout 10 0
+ login authentication default
+ transport input ssh
+!
+end

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.22', '1.23', '1.24']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - name: Cache Go build + module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go }}-
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt (fail on unformatted)
+        # `gofmt -l` lists unformatted files. If any output appears we fail
+        # with the file list so the offender is obvious in CI logs.
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt detected unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go test (unit)
+        run: go test ./...
+
+      - name: go test (integration)
+        # The integration suite spins up real SSH listeners on loopback and
+        # scrapes /metrics via HTTP — no external services required.
+        run: go test -tags integration ./...
+
+      - name: go build
+        run: go build ./...

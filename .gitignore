@@ -1,0 +1,41 @@
+# Binaries and build output
+/bin/
+/build/
+/dist/
+
+# Go test and coverage artifacts
+*.test
+*.out
+coverage.out
+cover.out
+coverage/
+
+# Profiling and benchmark output
+*.prof
+*.pprof
+*.trace
+
+# Generated simulation data (large, reproducible)
+/configs/device-*.cfg
+/manifest.csv
+/host-keys/
+
+# Temporary runtime/log artifacts
+*.log
+*.pid
+*.tmp
+*.todo
+/tmp/
+
+# IDE/editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local Go workspace files
+go.work
+go.work.sum
+
+# AI Specific files
+.claude/settings.local.json

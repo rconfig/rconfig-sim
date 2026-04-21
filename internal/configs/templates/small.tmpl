@@ -1,0 +1,142 @@
+Building configuration...
+
+Current configuration : {{.FileSizeHint}} bytes
+!
+! Last configuration change at {{.Clock}}
+!
+version 15.2
+service timestamps debug datetime msec localtime show-timezone
+service timestamps log datetime msec localtime show-timezone
+service password-encryption
+service sequence-numbers
+no service pad
+no service finger
+!
+hostname {{.Hostname}}
+!
+boot-start-marker
+boot-end-marker
+!
+logging buffered 16384 informational
+no logging console
+enable secret 5 {{.EnableSecret}}
+!
+{{range .Users -}}
+username {{.Name}} privilege {{.Privilege}} secret 5 {{.SecretHash}}
+{{end -}}
+!
+aaa new-model
+aaa authentication login default local
+aaa authorization exec default local
+aaa session-id common
+!
+clock timezone UTC 0 0
+!
+no ip source-route
+no ip gratuitous-arps
+ip cef
+no ip domain-lookup
+ip domain-name {{.DomainName}}
+{{range .NameServers -}}
+ip name-server {{.}}
+{{end -}}
+!
+ip ssh version 2
+ip ssh authentication-retries 3
+ip ssh time-out 60
+no ip http server
+no ip http secure-server
+!
+vtp mode transparent
+udld aggressive
+errdisable recovery cause bpduguard
+errdisable recovery cause link-flap
+errdisable recovery interval 300
+!
+spanning-tree mode rapid-pvst
+spanning-tree extend system-id
+spanning-tree portfast bpduguard default
+!
+{{range .VLANs -}}
+vlan {{.ID}}
+ name {{.Name}}
+!
+{{end -}}
+{{range .Interfaces -}}
+interface {{.Name}}
+{{- if .Description}}
+ description {{.Description}}{{end}}
+{{- if eq .Mode "access"}}
+ switchport mode access
+ switchport access vlan {{.VLAN}}
+ switchport nonegotiate
+ storm-control broadcast level 1.00
+ storm-control multicast level 1.00
+{{- if .Portfast}}
+ spanning-tree portfast{{end}}
+{{- if .BPDUGuard}}
+ spanning-tree bpduguard enable{{end}}
+{{- else if eq .Mode "trunk"}}
+ switchport mode trunk
+ switchport trunk encapsulation dot1q
+ switchport trunk native vlan {{.VLAN}}
+ switchport trunk allowed vlan {{.AllowedVLANsStr}}
+ switchport nonegotiate
+{{- else}}
+ no switchport
+ ip address {{.IPAddress}} {{.Netmask}}{{end}}
+{{- if .Shutdown}}
+ shutdown
+{{- else}}
+ no shutdown
+{{- end}}
+!
+{{end -}}
+{{range .ACLs -}}
+ip access-list extended {{.Name}}
+ remark {{.Remark}}
+{{- range .Entries}}
+ {{.Seq}} {{.Action}} {{.Protocol}} {{.Source}} {{.Dest}}{{if .Extra}} {{.Extra}}{{end}}
+{{- end}}
+!
+{{end -}}
+{{range .StaticRoutes -}}
+ip route {{.Network}} {{.Mask}} {{.NextHop}}{{if .AD}} {{.AD}}{{end}}{{if .Name}} name {{.Name}}{{end}}
+{{end -}}
+!
+snmp-server community {{.SNMPCommunityRO}} RO
+snmp-server community {{.SNMPCommunityRW}} RW
+snmp-server location {{.SNMPLocation}}
+snmp-server contact {{.SNMPContact}}
+snmp-server enable traps snmp authentication linkdown linkup coldstart warmstart
+snmp-server enable traps entity-sensor threshold
+!
+{{range .LoggingHosts -}}
+logging host {{.}}
+{{end -}}
+logging trap informational
+logging source-interface Loopback0
+!
+{{range .NTPServers -}}
+ntp server {{.}}
+{{end -}}
+!
+banner motd ^C
+{{range .BannerMOTD}}{{.}}
+{{end -}}^C
+!
+line con 0
+ exec-timeout 10 0
+ login authentication default
+ logging synchronous
+ transport output none
+line vty 0 4
+ exec-timeout 10 0
+ login authentication default
+ transport input ssh
+line vty 5 15
+ exec-timeout 10 0
+ login authentication default
+ transport input ssh
+!
+end

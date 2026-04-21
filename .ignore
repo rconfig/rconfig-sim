@@ -1,0 +1,17 @@
+# Keep search fast by skipping generated/binary artifacts.
+bin/
+build/
+dist/
+
+# Large generated simulation payloads.
+configs/device-*.cfg
+manifest.csv
+host-keys/
+
+# Common transient output.
+*.out
+*.log
+*.prof
+*.pprof
+coverage/
+tmp/

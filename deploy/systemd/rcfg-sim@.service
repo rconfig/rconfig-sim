@@ -1,0 +1,76 @@
+[Unit]
+Description=rConfig SSH simulator (instance %i)
+Documentation=file:///opt/rcfg-sim/README.md
+After=network-online.target
+Wants=network-online.target
+
+# StartLimit* live in [Unit] on systemd >= 230. Cap restart-storming on a
+# bad config at 5 restarts / 60 s.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=rcfgsim
+Group=rcfgsim
+
+# Per-instance config: /etc/rcfg-sim/10.50.0.1.env supplies LISTEN_IP,
+# PORT_START, etc. See /opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample.
+EnvironmentFile=/etc/rcfg-sim/%i.env
+
+ExecStart=/opt/rcfg-sim/bin/rcfg-sim \
+    --listen-ip=${LISTEN_IP} \
+    --port-start=${PORT_START} \
+    --port-count=${PORT_COUNT} \
+    --manifest=${MANIFEST} \
+    --host-key=${HOST_KEY} \
+    --username=${USERNAME} \
+    --password=${PASSWORD} \
+    --enable-password=${ENABLE_PASSWORD} \
+    --metrics-addr=${METRICS_ADDR} \
+    --response-delay-ms-min=${RESPONSE_DELAY_MS_MIN} \
+    --response-delay-ms-max=${RESPONSE_DELAY_MS_MAX} \
+    --max-concurrent-sessions=${MAX_CONCURRENT_SESSIONS} \
+    --fault-rate=${FAULT_RATE} \
+    --fault-types=${FAULT_TYPES} \
+    --log-level=${LOG_LEVEL}
+
+# rcfg-sim binds PORT_COUNT listeners (default 2500) plus up to MAX_SESSIONS
+# concurrent accepts. 200k fd budget is comfortable headroom for both and
+# absorbs any short-term accept bursts without EMFILE.
+LimitNOFILE=200000
+
+# Restart policy. 5s backoff; see [Unit] for the StartLimit cap.
+Restart=on-failure
+RestartSec=5s
+
+# Graceful drain: rcfg-sim handles SIGTERM by stopping the listeners,
+# waiting up to 30s for active SSH sessions to complete, then unmapping
+# configs. 45s gives that internal drain 15s of slack before systemd
+# escalates to SIGKILL.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rcfg-sim@%i
+
+# Sandboxing. rcfg-sim needs nothing beyond its own config tree and /tmp;
+# keep the rest of the FS off-limits and drop ambient privs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Host keys auto-generate on first boot and must persist across restarts.
+# README's recommended location is /opt/rcfg-sim/host-keys/<IP>.key; operators
+# who prefer /etc may keep their keys there instead. Both paths are listed so
+# either convention works without editing the unit.
+ReadWritePaths=/etc/rcfg-sim /opt/rcfg-sim/host-keys
+
+[Install]
+WantedBy=multi-user.target
