@@ -11,11 +11,14 @@
 Stand up 50,000 fake network devices on a single Linux host. Each one speaks real SSH, serves realistic multi-KB to multi-MB running-configs, and responds exactly like Cisco IOS — enough to exercise rConfig's scheduler, collectors, parser, diff engine, and storage pipeline under production-shaped load.
 
 [![CI](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/website-rconfig.com%2Frconfig--sim-D97757)](https://www.rconfig.com/rconfig-sim)
 [![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)]()
 [![Status](https://img.shields.io/badge/status-v1-brightgreen)]()
 [![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+
+**[Project website →](https://www.rconfig.com/rconfig-sim)**
 
 [Quickstart](#quickstart) · [Architecture](#architecture) · [Deployment](#full-deployment) · [Operations](#operational-runbook) · [Metrics](#metrics-reference) · [Faults](#fault-injection) · [Troubleshooting](#troubleshooting)
 
@@ -1444,6 +1447,12 @@ MIT. See [LICENSE](LICENSE).
 ---
 
 <div align="center">
+
+<a href="https://www.rconfig.com/rconfig-sim">
+  <img src="docs/images/logo.png" alt="rconfig-sim" width="72" />
+</a>
+
+**[rconfig.com/rconfig-sim](https://www.rconfig.com/rconfig-sim)** — project landing page, release notes, and roadmap.
 
 Built for [rConfig](https://www.rconfig.com) — network configuration management at scale.
 

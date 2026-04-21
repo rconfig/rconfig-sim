@@ -1,91 +1,41 @@
-# Contributing to rcfg-sim
+# Changelog
 
-Thanks for considering a contribution. `rcfg-sim` is a focused tool — a load-test simulator for [rConfig](https://www.rconfig.com) — so the scope of what makes sense as a contribution is narrower than a general-purpose library. This page covers what fits, how to build, and the PR workflow.
+All notable changes to `rcfg-sim` are documented here.
 
-## Scope
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**In scope:**
+## [1.0.0] — 2026-04-21
 
-- Fixes to SSH handshake, command dispatch, session lifecycle, or drain behaviour
-- Generator improvements: realism of Cisco IOS output, performance, determinism
-- Metrics additions that follow the bounded-cardinality rule
-- New fault-injection types that exercise a specific rConfig failure mode
-- Deployment artifact improvements (systemd, sysctl, IP aliasing)
-- Documentation, test coverage, CI
+Initial public release. High-density Cisco IOS SSH simulator for load testing [rConfig](https://www.rconfig.com).
 
-**Out of scope:**
+### Added
 
-- Full Cisco IOS emulation (config mode, routing protocols, etc.) — see [README § Known limitations](README.md#known-limitations)
-- Multi-vendor emulation (JunOS, EOS, NX-OS) — fork the project if you need this
-- Features aimed at production use rather than load testing
-- Changes that couple `rcfg-sim` to a specific rConfig version
+- **50,000+ concurrent SSH listeners** on a single host via `mmap`'d configs — `MAP_SHARED`/`PROT_READ`, zero-copy delivery on the hot path.
+- **Real Cisco IOS emulation**: enable mode, Cisco-style abbreviated commands (`sh run` → `show running-config`), ambiguity detection, realistic prompts (`>` / `#`), deterministic per-device serial numbers, the ten-or-so commands rConfig's stock collection template issues (`terminal length 0`, `terminal pager 0`, `enable`, `show version`, `show running-config`, `show startup-config`, `show inventory`, `exit` / `quit` / `logout` / `end`).
+- **Deterministic config generator** (`rcfg-sim-gen`): four size buckets (small ~30 KB to huge ~5 MB) with parameterised hostnames, ACLs, interfaces, VLANs, routing, AAA stanzas; 200 fictional sites; seeded RNG produces byte-identical output across runs; parallel rendering sized to `runtime.NumCPU()`.
+- **Prometheus metrics** with bounded label cardinality (verified by test): `rcfgsim_active_sessions`, `rcfgsim_sessions_total{result}`, `rcfgsim_session_duration_seconds`, `rcfgsim_command_duration_seconds{command}`, `rcfgsim_bytes_sent_total`, `rcfgsim_auth_attempts_total{result}`, `rcfgsim_handshake_duration_seconds`, `rcfgsim_faults_injected_total{type}`. Plus standard Go runtime + process collectors. `/healthz` for liveness.
+- **Four fault injection types** with per-session RNG and verified zero overhead when disabled: `auth_fail` (reject handshake), `disconnect_mid` (TCP RST during `show running-config`), `slow_response` (10–50× delay multiplier), `malformed` (truncate / inject marker / bit-flip). Each independently toggleable via `--fault-types`.
+- **Systemd-native operation**: one `rcfg-sim@<LISTEN_IP>.service` instance per IP alias, independent restart, graceful drain (up to 30 s) via SIGTERM, per-instance env file at `/etc/rcfg-sim/<IP>.env`, journal logging with structured JSON, sandbox hardening (`NoNewPrivileges`, `ProtectSystem=full`, `PrivateTmp`).
+- **Deployment artifacts**: `deploy/systemd/rcfg-sim@.service` template unit, `deploy/ip-aliases.sh` for batched idempotent IP alias management, `deploy/sysctl-rcfg-sim.conf` tuning drop-in, `deploy/limits-rcfg-sim.conf` for interactive use.
+- **Makefile targets**: `build`, `test`, `integration`, `bench`, `vet`, `fmt`, `install`, `uninstall`, `generate-configs`, `deploy-aliases`, `remove-aliases`.
+- **Documentation**: comprehensive README (quickstart through production runbook), [FEATURE-TESTS.md](FEATURE-TESTS.md) with 36 runnable manual feature-verification procedures, [TEST-SCENARIOS.md](TEST-SCENARIOS.md) with 9 end-to-end load-testing scenarios, [SECURITY.md](SECURITY.md) reporting policy.
+- **CI**: GitHub Actions workflow testing `go vet`, `gofmt`, unit + integration tests, and build across Go 1.22 / 1.23 / 1.24.
 
-If you're not sure whether a change fits, open an issue before writing code.
+### Security
 
-## Reporting issues
+- Password auth only; no SSH public key auth (out of scope for the rConfig collection flow).
+- Documented test credentials (`admin` / `admin` / `enable123`) are for lab use — not production secrets.
+- Metrics endpoint exposes only bounded label sets; no hostname or session-ID labels that could leak cardinality.
+- Systemd unit runs as unprivileged `rcfgsim` user under sandbox; `LimitNOFILE=200000`.
 
-- **Security vulnerabilities**: do NOT open a public issue. Follow [SECURITY.md](SECURITY.md).
-- **Bugs**: open a GitHub issue with reproduction steps, the commit hash, and the relevant log lines from `journalctl -u rcfg-sim@<IP>`.
-- **Feature requests**: open an issue describing the rConfig behaviour you want to exercise. Features without a concrete load-test use case are unlikely to land.
+### Known limitations
 
-## Development setup
+- Single-host scale: target is 50k devices on one Rocky 9 box; horizontal scaling across hosts is out of scope.
+- Cisco IOS only — no multi-vendor emulation.
+- No SSH config mutation (`configure terminal`, `write memory`, etc. return `% Invalid input`).
+- `show startup-config` returns the same bytes as `show running-config` by design in v1.
+- IPv4 only; no IPv6 listener binding.
 
-```bash
-git clone https://github.com/rconfig/rconfig-sim.git
-cd rconfig-sim
-make build               # → bin/rcfg-sim, bin/rcfg-sim-gen
-make test                # unit tests
-make integration         # integration suite (spawns real SSH listeners on loopback)
-make bench               # hot-path benchmarks
-make vet                 # go vet with and without the integration build tag
-make fmt                 # gofmt -s -w
-```
+See [README § Known limitations](README.md#known-limitations) for the full list.
 
-Go 1.22+ is required; CI matrixes 1.22 / 1.23 / 1.24. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exactly what CI runs.
-
-## Pull request workflow
-
-1. **Open an issue first** for anything beyond a typo or a one-line bug fix. This lets us agree on direction before you spend time.
-2. **Fork and branch**. Branch names like `fix/handshake-deadline` or `feat/new-fault-type` are helpful but not mandatory.
-3. **Keep the change focused**. One logical change per PR. Mixed refactor + feature PRs will be asked to split.
-4. **Add or update tests**. Unit tests for pure functions, integration tests (`//go:build integration`) for anything that crosses the SSH or metrics HTTP boundary. See [FEATURE-TESTS.md](FEATURE-TESTS.md) for the manual test catalogue.
-5. **Run the gates before pushing**:
-   ```bash
-   make vet && make fmt && make test && make integration
-   ```
-   CI runs the same commands. Failing CI blocks merge.
-6. **Write a clear commit message**. We use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`. Example:
-   ```
-   fix(dispatch): reject "en" with Ambiguous, not CmdEnable
-
-   "en" is a prefix of both "enable" and "end". Prior logic silently
-   picked the first table entry, which violated spec. Fix: require
-   exact canonical match for single-token ambiguous prefixes.
-
-   Closes #42.
-   ```
-7. **Open the PR** with a summary covering what, why, and how it was tested. Link the originating issue.
-
-## Style
-
-- Code: `gofmt -s` clean, `go vet` clean, covered by the CI gate.
-- No new third-party dependencies without discussion — the current set (`golang.org/x/crypto`, `golang.org/x/sys`, `prometheus/client_golang`) is intentionally small. See [README § Known limitations](README.md#known-limitations).
-- Zero-copy hot path is load-bearing. Config-serving code paths MUST NOT allocate per-session. If a fault handler has to allocate, see the `malformed` fault implementation for the pattern.
-- Metric labels MUST come from a closed enum, never raw user input. The integration test (`TestMetrics_Cardinality`) enforces this.
-- Graceful shutdown: any new goroutine must be accounted for in `Server.Shutdown` or via the `sessionWG` / `acceptWG`.
-
-## Releasing
-
-Maintainer-only. Rough process:
-
-1. Update `CHANGELOG.md` under a new `## [X.Y.Z] — YYYY-MM-DD` heading.
-2. Tag: `git tag -s vX.Y.Z -m "vX.Y.Z"` on `main` after CI is green.
-3. Push the tag; GitHub Actions can be extended to draft a release — not currently automated.
-
-## Code of Conduct
-
-Participation in this project is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-
-## License
-
-By contributing, you agree your contributions are licensed under the project's [MIT License](LICENSE).
+[1.0.0]: https://github.com/rconfig/rconfig-sim/releases/tag/v1.0.0
