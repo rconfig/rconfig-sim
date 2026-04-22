@@ -54,7 +54,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 
 **It is:** a purpose-built Go SSH server that emulates Cisco IOS devices well enough to satisfy rConfig's standard collection flow. It is designed to run at extreme density — tens of thousands of listeners on a single host — with bounded memory, zero-copy config delivery, and realistic timing characteristics. It emits Prometheus metrics covering session lifecycle, throughput, and fault activity. It supports deliberate fault injection to exercise rConfig's error handling paths.
 
-**It isn't:** a full Cisco IOS emulator, a network topology simulator (no routing, no data plane, no control plane), or a replacement for GNS3/EVE-NG/Containerlab. It doesn't do SSH key auth, VRF separation, or anything past the ten-or-so commands rConfig actually issues. The point is to load-test an NMS, not to run virtual labs.
+**It isn't:** a full Cisco IOS emulator, a network topology simulator (no routing, no data plane, no control plane), or a replacement for GNS3/EVE-NG/Containerlab. It doesn't do SSH key auth, VRF separation, or anything past the ten-or-so commands rConfig-sim actually issues. The point is to load-test an NMS, not to run virtual labs.
 
 If you need to validate rConfig's behaviour against 50,000 devices without spending $2M on real hardware or burning a datacentre on VM emulation, this is the tool.
 
