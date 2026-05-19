@@ -1,12 +1,12 @@
 module github.com/rcfg-sim/rcfg-sim
 
-go 1.22
+go 1.24.0
 
 require (
 	github.com/prometheus/client_golang v1.19.1
 	github.com/prometheus/client_model v0.5.0
-	golang.org/x/crypto v0.24.0
-	golang.org/x/sys v0.21.0
+	golang.org/x/crypto v0.45.0
+	golang.org/x/sys v0.38.0
 )
 
 require (
