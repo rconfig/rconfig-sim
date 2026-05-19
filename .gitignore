@@ -32,6 +32,7 @@ coverage/
 .idea/
 .DS_Store
 Thumbs.db
+.todo
 
 # Local Go workspace files
 go.work
