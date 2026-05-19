@@ -412,7 +412,6 @@ For this quickstart, stay on loopback and test locally.
   --listen-ip 127.0.0.1 \
   --port-start 12000 \
   --port-count 100 \
-  --configs-dir /tmp/rcfg-test/configs \
   --manifest /tmp/rcfg-test/manifest.csv \
   --host-key /tmp/rcfg-test/hostkey \
   --metrics-addr 127.0.0.1:9100 &
@@ -1206,11 +1205,10 @@ SSH server. One instance per IP alias.
 --listen-ip string             IP address to bind (required)
 --port-start int               First port to bind (default 10000)
 --port-count int               Number of ports (default 2500)
---configs-dir string           Config file directory (default "/opt/rcfg-sim/configs")
---manifest string              Manifest CSV with port→device mapping (required)
+--manifest string              Manifest CSV with port→device mapping; config paths come from this file (required)
 --host-key string              Path to SSH host key (generated if missing)
 --username string              Accepted username; empty = any (default "admin")
---password string              Accepted password; empty = any (default "")
+--password string              Accepted password; empty = any (default "admin")
 --enable-password string       Enable mode password (default "enable123")
 --metrics-addr string          HTTP addr for /metrics and /healthz (default "0.0.0.0:9100")
 --response-delay-ms-min int    Minimum response delay (default 50)
