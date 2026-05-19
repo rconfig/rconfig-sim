@@ -239,7 +239,7 @@ Skew entirely to small to verify distribution parsing and stratified counts.
 ```bash
 rm -rf /tmp/rcfg-sim-g4 && mkdir -p /tmp/rcfg-sim-g4
 ./bin/rcfg-sim-gen --count 50 --seed 1 \
-  --distribution "small:100,medium:0,large:0,huge:0" \
+  --distribution "sm:100,md:0,lg:0,xl:0" \
   --output-dir /tmp/rcfg-sim-g4/configs \
   --manifest   /tmp/rcfg-sim-g4/manifest.csv \
   | tail -6
@@ -271,9 +271,9 @@ Expect: runtime ≈ 8 min on 12 cores, distribution 20000/20000/7500/2500.
 Confirms sanity checking on user input.
 
 ```bash
-./bin/rcfg-sim-gen --count 10 --distribution "small:50,medium:40"       ; echo "exit=$?"
-./bin/rcfg-sim-gen --count 10 --distribution "tiny:100"                 ; echo "exit=$?"
-./bin/rcfg-sim-gen --count 10 --distribution "small:40,medium:40,large:15,huge:5"
+./bin/rcfg-sim-gen --count 10 --distribution "sm:50,md:40"             ; echo "exit=$?"
+./bin/rcfg-sim-gen --count 10 --distribution "tiny:100"                ; echo "exit=$?"
+./bin/rcfg-sim-gen --count 10 --distribution "sm:40,md:40,lg:15,xl:5"
 ```
 
 Expect: first two exit 1 with a descriptive message ("weights must sum to 100" / "unknown bucket"); third runs.
@@ -347,7 +347,7 @@ Expect: a line like `rtr-dfw-edge-1000 uptime is 12 weeks, 3 days, 11 hours, 29 
 <a name="s4"></a>
 ### S4 — `show running-config` streams full mmap'd config
 
-Streams the full rendered config for one device. For a "medium" device expect ~190 KB; for "huge" ~3 MB.
+Streams the full rendered config for one device. For an `md` device expect ~190 KB; `xl` ~3 MB; `6xl` ~100 MB.
 
 ```bash
 /tmp/rcfg-sim-client/client -port 12000 -enable-mode \

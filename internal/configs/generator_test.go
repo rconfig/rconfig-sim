@@ -21,7 +21,7 @@ func baseTestConfig(t *testing.T, count int) Config {
 		PortStart:      10000,
 		DevicesPerIP:   2500,
 		Seed:           42,
-		Distribution:   "small:40,medium:40,large:15,huge:5",
+		Distribution:   "sm:40,md:40,lg:15,xl:5",
 		Username:       "admin",
 		Password:       "admin",
 		EnablePassword: "enable123",
@@ -39,7 +39,7 @@ func TestRunSmallRun(t *testing.T) {
 		t.Fatalf("want count=100, got %d", sum.Count)
 	}
 	// Expected stratified counts: 40/40/15/5
-	expected := map[string]int{"small": 40, "medium": 40, "large": 15, "huge": 5}
+	expected := map[string]int{"sm": 40, "md": 40, "lg": 15, "xl": 5}
 	for b, want := range expected {
 		got := sum.PerBucket[b].Realised
 		if got != want {
@@ -118,17 +118,17 @@ func mustGlobIndex(t *testing.T, dir string, idx int) string {
 }
 
 func TestParseDistribution(t *testing.T) {
-	good := "small:40,medium:40,large:15,huge:5"
+	good := "sm:40,md:40,lg:15,xl:5"
 	w, err := parseDistribution(good)
 	if err != nil {
 		t.Fatalf("parse %q: %v", good, err)
 	}
-	for _, b := range []string{"small", "medium", "large", "huge"} {
+	for _, b := range []string{"sm", "md", "lg", "xl"} {
 		if _, ok := w[b]; !ok {
 			t.Errorf("bucket %s missing", b)
 		}
 	}
-	if _, err := parseDistribution("small:50,medium:40"); err == nil {
+	if _, err := parseDistribution("sm:50,md:40"); err == nil {
 		t.Error("expected error on non-100-sum distribution")
 	}
 	if _, err := parseDistribution("tiny:100"); err == nil {
@@ -137,9 +137,9 @@ func TestParseDistribution(t *testing.T) {
 }
 
 func TestStratifiedCountsExact(t *testing.T) {
-	weights := map[string]int{"small": 40, "medium": 40, "large": 15, "huge": 5}
+	weights := map[string]int{"sm": 40, "md": 40, "lg": 15, "xl": 5}
 	c := stratifiedCounts(100, weights)
-	want := map[string]int{"small": 40, "medium": 40, "large": 15, "huge": 5}
+	want := map[string]int{"sm": 40, "md": 40, "lg": 15, "xl": 5}
 	for b, w := range want {
 		if c[b] != w {
 			t.Errorf("bucket %s: want %d, got %d", b, w, c[b])

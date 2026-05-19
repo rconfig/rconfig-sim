@@ -406,7 +406,7 @@ sudo -u rcfgsim /opt/rcfg-sim/bin/rcfg-sim-gen \
   --port-start 10000 \
   --devices-per-ip 2500 \
   --seed 5 \
-  --distribution "small:40,medium:40,large:15,huge:5"
+  --distribution "sm:40,md:40,lg:15,xl:5"
 
 # 20 env files
 for i in $(seq 1 20); do
@@ -682,7 +682,7 @@ sudo -u rcfgsim /opt/rcfg-sim/bin/rcfg-sim-gen \
   --port-start 10000 \
   --devices-per-ip 2500 \
   --seed 9 \
-  --distribution "small:10,medium:30,large:20,huge:40"
+  --distribution "sm:10,md:30,lg:20,xl:40"
 
 # Check disk usage
 du -sh /opt/rcfg-sim/configs/

@@ -21,8 +21,18 @@ import (
 var templateFS embed.FS
 
 var (
-	bucketOrder     = []string{"small", "medium", "large", "huge"}
-	compiledOnce    *template.Template
+	bucketOrder  = []string{"sm", "md", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl"}
+	compiledOnce *template.Template
+	// templateAliases lets new buckets share an existing .tmpl file. Tiers above
+	// "xl" differ only in profile counts (more interfaces, ACLs, routes); they
+	// share xl.tmpl's feature set rather than duplicating 11 KB per tier.
+	templateAliases = map[string]string{
+		"2xl": "xl.tmpl",
+		"3xl": "xl.tmpl",
+		"4xl": "xl.tmpl",
+		"5xl": "xl.tmpl",
+		"6xl": "xl.tmpl",
+	}
 	templateFuncMap = template.FuncMap{
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
@@ -70,14 +80,14 @@ type profile struct {
 }
 
 var profiles = map[string]profile{
-	"small": {
+	"sm": {
 		deviceKind:     "switch",
 		interfaceCount: 48, subinterfaceCount: 0, vlanCount: 4,
 		aclCount: 3, aclEntriesMin: 25, aclEntriesMax: 40,
 		staticRouteCount: 5,
 		fileSizeHint:     30000,
 	},
-	"medium": {
+	"md": {
 		deviceKind:     "router",
 		interfaceCount: 48, subinterfaceCount: 60, vlanCount: 20,
 		aclCount: 12, aclEntriesMin: 120, aclEntriesMax: 200,
@@ -88,7 +98,7 @@ var profiles = map[string]profile{
 		hasOSPF:          true, hasCrypto: true, hasQoS: true,
 		fileSizeHint: 150000,
 	},
-	"large": {
+	"lg": {
 		deviceKind:     "router",
 		interfaceCount: 96, subinterfaceCount: 60, vlanCount: 30,
 		aclCount: 25, aclEntriesMin: 350, aclEntriesMax: 500,
@@ -101,7 +111,7 @@ var profiles = map[string]profile{
 		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
 		fileSizeHint: 700000,
 	},
-	"huge": {
+	"xl": {
 		deviceKind:     "router",
 		interfaceCount: 192, subinterfaceCount: 100, vlanCount: 40,
 		aclCount: 60, aclEntriesMin: 600, aclEntriesMax: 800,
@@ -113,6 +123,71 @@ var profiles = map[string]profile{
 		vrfCount:         30,
 		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
 		fileSizeHint: 4000000,
+	},
+	"2xl": {
+		deviceKind:     "router",
+		interfaceCount: 256, subinterfaceCount: 150, vlanCount: 60,
+		aclCount: 100, aclEntriesMin: 750, aclEntriesMax: 1000,
+		prefixListCount: 60, prefixListEntriesMin: 50, prefixListEntriesMax: 80,
+		routeMapCount:    120,
+		staticRouteCount: 6000,
+		bgpNeighbors:     30,
+		ospfAreas:        6,
+		vrfCount:         50,
+		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
+		fileSizeHint: 8000000,
+	},
+	"3xl": {
+		deviceKind:     "router",
+		interfaceCount: 384, subinterfaceCount: 200, vlanCount: 80,
+		aclCount: 160, aclEntriesMin: 1000, aclEntriesMax: 1300,
+		prefixListCount: 90, prefixListEntriesMin: 60, prefixListEntriesMax: 100,
+		routeMapCount:    180,
+		staticRouteCount: 12000,
+		bgpNeighbors:     40,
+		ospfAreas:        8,
+		vrfCount:         70,
+		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
+		fileSizeHint: 16000000,
+	},
+	"4xl": {
+		deviceKind:     "router",
+		interfaceCount: 512, subinterfaceCount: 280, vlanCount: 100,
+		aclCount: 240, aclEntriesMin: 1300, aclEntriesMax: 1700,
+		prefixListCount: 130, prefixListEntriesMin: 80, prefixListEntriesMax: 130,
+		routeMapCount:    260,
+		staticRouteCount: 24000,
+		bgpNeighbors:     60,
+		ospfAreas:        10,
+		vrfCount:         100,
+		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
+		fileSizeHint: 32000000,
+	},
+	"5xl": {
+		deviceKind:     "router",
+		interfaceCount: 768, subinterfaceCount: 400, vlanCount: 140,
+		aclCount: 380, aclEntriesMin: 1700, aclEntriesMax: 2300,
+		prefixListCount: 200, prefixListEntriesMin: 100, prefixListEntriesMax: 170,
+		routeMapCount:    400,
+		staticRouteCount: 48000,
+		bgpNeighbors:     100,
+		ospfAreas:        14,
+		vrfCount:         150,
+		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
+		fileSizeHint: 64000000,
+	},
+	"6xl": {
+		deviceKind:     "router",
+		interfaceCount: 1024, subinterfaceCount: 600, vlanCount: 200,
+		aclCount: 600, aclEntriesMin: 2200, aclEntriesMax: 3000,
+		prefixListCount: 320, prefixListEntriesMin: 130, prefixListEntriesMax: 220,
+		routeMapCount:    640,
+		staticRouteCount: 96000,
+		bgpNeighbors:     160,
+		ospfAreas:        20,
+		vrfCount:         220,
+		hasBGP:           true, hasOSPF: true, hasCrypto: true, hasQoS: true, hasVRF: true,
+		fileSizeHint: 128000000,
 	},
 }
 
@@ -174,7 +249,7 @@ func avgOr0(total int64, n int) int64 {
 	return total / int64(n)
 }
 
-// parseDistribution turns "small:40,medium:40,large:15,huge:5" into a map of percent weights.
+// parseDistribution turns "sm:40,md:40,lg:15,xl:5" into a map of percent weights.
 func parseDistribution(s string) (map[string]int, error) {
 	weights := map[string]int{}
 	for _, tok := range strings.Split(s, ",") {
@@ -188,7 +263,7 @@ func parseDistribution(s string) (map[string]int, error) {
 		}
 		name := strings.TrimSpace(parts[0])
 		if _, ok := profiles[name]; !ok {
-			return nil, fmt.Errorf("unknown bucket %q (valid: small, medium, large, huge)", name)
+			return nil, fmt.Errorf("unknown bucket %q (valid: %s)", name, strings.Join(bucketOrder, ", "))
 		}
 		w, err := strconv.Atoi(strings.TrimSpace(parts[1]))
 		if err != nil {
@@ -330,7 +405,11 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 					continue
 				}
 				counter := &byteCounter{w: f}
-				if rerr := compiledOnce.ExecuteTemplate(counter, bucket+".tmpl", data); rerr != nil {
+				tmplName := bucket + ".tmpl"
+				if alias, ok := templateAliases[bucket]; ok {
+					tmplName = alias
+				}
+				if rerr := compiledOnce.ExecuteTemplate(counter, tmplName, data); rerr != nil {
 					f.Close()
 					results[i] = result{err: fmt.Errorf("render %s (%s): %w", path, bucket, rerr)}
 					continue

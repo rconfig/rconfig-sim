@@ -4,7 +4,53 @@ All notable changes to `rcfg-sim` are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] — 2026-04-21
+## [Unreleased]
+
+## [0.0.2] — 2026-05-19
+
+Bucket-label rename and five new stress-test size tiers. Breaking change: every `--distribution` string and every `size_bucket` value in existing manifests is invalidated. Migration is a mechanical rename — see below.
+
+### Breaking
+
+- **Renamed all four size buckets** to clothing-size labels:
+  - `small` → `sm`
+  - `medium` → `md`
+  - `large` → `lg`
+  - `huge` → `xl`
+- **Renamed the corresponding templates** under `internal/configs/templates/`: `small.tmpl` → `sm.tmpl`, `medium.tmpl` → `md.tmpl`, `large.tmpl` → `lg.tmpl`, `huge.tmpl` → `xl.tmpl`.
+- **Changed the `--distribution` default** on `rcfg-sim-gen` from `"small:40,medium:40,large:15,huge:5"` to `"sm:40,md:40,lg:15,xl:5"`.
+- **Manifest `size_bucket` column values** now emit the new labels. Any rConfig group import or downstream tool that filters on bucket names must be updated.
+
+#### Migration
+
+```bash
+# Old invocation:
+rcfg-sim-gen --distribution "small:40,medium:40,large:15,huge:5"
+
+# New invocation (identical distribution):
+rcfg-sim-gen --distribution "sm:40,md:40,lg:15,xl:5"
+```
+
+For pre-generated manifests, either regenerate or `sed -i 's/,small$/,sm/; s/,medium$/,md/; s/,large$/,lg/; s/,huge$/,xl/' manifest.csv`.
+
+### Added
+
+- **Five new stress-test size tiers** above `xl`, accessible from `rcfg-sim-gen --distribution`:
+  - `2xl` — ~8 MB hint, ~6 MB realised (256 interfaces, 100 ACLs, 6 K static routes, 30 BGP neighbours, 50 VRFs).
+  - `3xl` — ~16 MB hint, ~13 MB realised (384 interfaces, 160 ACLs, 12 K static routes, 40 BGP, 70 VRFs).
+  - `4xl` — ~32 MB hint, ~25 MB realised (512 interfaces, 240 ACLs, 24 K static routes, 60 BGP, 100 VRFs).
+  - `5xl` — ~64 MB hint, ~52 MB realised (768 interfaces, 380 ACLs, 48 K static routes, 100 BGP, 150 VRFs).
+  - `6xl` — ~128 MB hint, ~107 MB realised (1024 interfaces, 600 ACLs, 96 K static routes, 160 BGP, 220 VRFs).
+
+  These tiers share the existing `xl` template via a template alias map — they differ from `xl` only in profile counts, not in feature set, so adding them costs ~80 lines of profile data with no duplicated boilerplate.
+
+### Changed
+
+- The "unknown bucket" error from `rcfg-sim-gen --distribution` now lists valid bucket names dynamically rather than hard-coding the v1 list.
+- README, `TEST-SCENARIOS.md`, and `FEATURE-TESTS.md` updated for the new bucket labels; the size-bucket table in the README now documents all nine tiers.
+- Added [CLAUDE.md](CLAUDE.md) with project rules for versioning, commit conventions, and release workflow.
+
+## [0.0.1] — 2026-04-21
 
 Initial public release. High-density Cisco IOS SSH simulator for load testing [rConfig](https://www.rconfig.com).
 
@@ -38,4 +84,6 @@ Initial public release. High-density Cisco IOS SSH simulator for load testing [r
 
 See [README § Known limitations](README.md#known-limitations) for the full list.
 
-[1.0.0]: https://github.com/rconfig/rconfig-sim/releases/tag/v1.0.0
+[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.2
+[0.0.1]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.1

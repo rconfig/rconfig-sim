@@ -40,7 +40,7 @@ func TestMetrics_EndToEnd(t *testing.T) {
 		PortStart:      0, // replaced below
 		DevicesPerIP:   3,
 		Seed:           17,
-		Distribution:   "small:100,medium:0,large:0,huge:0",
+		Distribution:   "sm:100,md:0,lg:0,xl:0",
 		Username:       "admin",
 		Password:       "admin",
 		EnablePassword: "enable123",
@@ -156,7 +156,7 @@ func TestMetrics_Cardinality(t *testing.T) {
 	if _, err := configs.Run(configs.Config{
 		Count: 3, OutputDir: configsDir, ManifestPath: manifest,
 		IPBase: "127.0.0.1", IPCount: 1, PortStart: sshPort, DevicesPerIP: 3,
-		Seed: 17, Distribution: "small:100,medium:0,large:0,huge:0",
+		Seed: 17, Distribution: "sm:100,md:0,lg:0,xl:0",
 		Username: "admin", Password: "admin", EnablePassword: "enable123",
 	}, io.Discard); err != nil {
 		t.Fatalf("generator: %v", err)

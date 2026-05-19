@@ -382,11 +382,11 @@ mkdir -p /tmp/rcfg-test/configs
 
 head -3 /tmp/rcfg-test/manifest.csv
 # → hostname,ip,port,vendor,template,username,password,enable_password,config_file,size_bucket
-# → rtr-msp-hq-1000,127.0.0.1,12000,Cisco,cisco_ios,admin,admin,enable123,/tmp/rcfg-test/configs/device-00000.cfg,medium
-# → sw-sea-admin-1001,127.0.0.1,12001,Cisco,cisco_ios,admin,admin,enable123,/tmp/rcfg-test/configs/device-00001.cfg,small
+# → rtr-msp-hq-1000,127.0.0.1,12000,Cisco,cisco_ios,admin,admin,enable123,/tmp/rcfg-test/configs/device-00000.cfg,md
+# → sw-sea-admin-1001,127.0.0.1,12001,Cisco,cisco_ios,admin,admin,enable123,/tmp/rcfg-test/configs/device-00001.cfg,sm
 ```
 
-You now have 100 config files on disk ranging from ~25 KB (access switches) up to possibly a few MB (DC cores), distributed 40/40/15/5 across small/medium/large/huge size buckets.
+You now have 100 config files on disk ranging from ~25 KB (access switches) up to possibly a few MB (DC cores), distributed 40/40/15/5 across sm/md/lg/xl size buckets. (Five further tiers — 2xl through 6xl — are available for stress testing, scaling up to ~100 MB per device.)
 
 ### 4. Run the simulator in the foreground
 
@@ -683,11 +683,11 @@ Then `sudo systemctl enable --now rcfg-sim-aliases` and the aliases come up auto
 
 **Purpose.** Produce the 50,000 Cisco IOS config files the simulator will serve, plus the manifest CSV that both the simulator and rConfig consume. This is the same tool and process from quickstart step 3, just at full scale and writing to the production paths.
 
-**What you're actually generating.** A mix of small (access switch), medium (aggregation router), large (core router), and huge (DC core / firewall replacement) configs across 200 fictional sites with unique hostnames, serial numbers, interface counts, ACL entries, and routing configuration. The distribution defaults to `small:40,medium:40,large:15,huge:5` which approximates a typical enterprise fleet — override if you want stress-test a specific profile (e.g. `huge:50` to push diff and storage limits).
+**What you're actually generating.** A mix of `sm` (access switch), `md` (aggregation router), `lg` (core router), and `xl` (DC core / firewall replacement) configs across 200 fictional sites with unique hostnames, serial numbers, interface counts, ACL entries, and routing configuration. Five more tiers (`2xl` through `6xl`) are available for stress testing — they extend the same router template with ever-larger interface, ACL, route, and BGP counts. The distribution defaults to `sm:40,md:40,lg:15,xl:5` which approximates a typical enterprise fleet — override if you want to stress-test a specific profile (e.g. `xl:50` to push diff and storage limits, or `6xl:5` to mix in ~100 MB configs).
 
 **Why run as the `rcfgsim` user.** The files need to be readable by the simulator process, which runs as `rcfgsim`. Running the generator as root leaves files with ambiguous ownership; running as your own user means the simulator can't read them. Doing it as `rcfgsim` directly avoids both problems.
 
-**Expected duration.** ~8 minutes on 12 cores (parallel generation, scales linearly with core count). Uses ~19 GB on disk. The huge configs dominate — 5% of files but ~40% of bytes.
+**Expected duration.** ~8 minutes on 12 cores (parallel generation, scales linearly with core count). Uses ~19 GB on disk. The `xl` configs dominate — 5% of files but ~40% of bytes.
 
 ```bash
 sudo -u rcfgsim /opt/rcfg-sim/bin/rcfg-sim-gen \
@@ -699,17 +699,17 @@ sudo -u rcfgsim /opt/rcfg-sim/bin/rcfg-sim-gen \
   --port-start 10000 \
   --devices-per-ip 2500 \
   --seed 42 \
-  --distribution "small:40,medium:40,large:15,huge:5"
+  --distribution "sm:40,md:40,lg:15,xl:5"
 ```
 
 Expected output:
 
 ```
 Generated 50000 devices in 7m42s
-  small:  20000 (40.00%, avg 25 KB)
-  medium: 20000 (40.00%, avg 188 KB)
-  large:   7500 (15.00%, avg 918 KB)
-  huge:    2500  (5.00%, avg 3.18 MB)
+  sm:     20000 (40.00%, avg 25 KB)
+  md:     20000 (40.00%, avg 188 KB)
+  lg:      7500 (15.00%, avg 918 KB)
+  xl:      2500  (5.00%, avg 3.18 MB)
 Total on disk: 19.04 GB
 Manifest: /opt/rcfg-sim/manifest.csv (50000 rows)
 ```
@@ -866,9 +866,9 @@ rConfig's group assignment UI accepts bulk CSV import of `hostname,group_name` p
 ```bash
 awk -F',' 'NR>1 {print $1","$NF}' /opt/rcfg-sim/manifest.csv > /tmp/group-assignments.csv
 head -3 /tmp/group-assignments.csv
-# → rtr-msp-hq-1000,medium
-# → sw-sea-admin-1001,small
-# → sw-bwi-colo-1002,small
+# → rtr-msp-hq-1000,md
+# → sw-sea-admin-1001,sm
+# → sw-bwi-colo-1002,sm
 ```
 
 Import that into rConfig's group management and kick off your first test poll.
@@ -986,7 +986,7 @@ sudo -u rcfgsim /opt/rcfg-sim/bin/rcfg-sim-gen \
   --count 50000 \
   --output-dir /opt/rcfg-sim/configs \
   --manifest /opt/rcfg-sim/manifest.csv \
-  --distribution "small:20,medium:50,large:20,huge:10" \
+  --distribution "sm:20,md:50,lg:20,xl:10" \
   --seed 42
 # (other flags unchanged from initial generation)
 
@@ -1140,16 +1140,21 @@ sum(rate(rcfgsim_bytes_sent_total[1m])) * 8
 
 ## Configuration templates
 
-Generated configs span four size buckets matching typical enterprise device classes:
+Generated configs span nine size buckets. The first four match typical enterprise device classes; the upper five (`2xl`–`6xl`) extend the same router feature set with progressively larger interface, ACL, route, and BGP counts for stress testing collectors, diff engines, and storage paths.
 
 | Bucket | Target size | Actual (seed 42) | Class | Contains |
 |---|---|---|---|---|
-| `small` | ~30 KB | 25 KB avg | Access switch | 24–48 interfaces, basic VLANs, SNMP, no routing |
-| `medium` | ~150 KB | 188 KB avg | Aggregation / small router | 48 interfaces, OSPF, small ACLs, logging |
-| `large` | ~700 KB | 918 KB avg | Core router | Multi-area OSPF, BGP (10 neighbours), large ACLs, QoS, crypto maps |
-| `huge` | 3–5 MB | 3.18 MB avg | DC core / firewall | Massive ACLs, VRFs, extensive BGP, prefix-lists, route-maps |
+| `sm` | ~30 KB | 25 KB avg | Access switch | 24–48 interfaces, basic VLANs, SNMP, no routing |
+| `md` | ~150 KB | 188 KB avg | Aggregation / small router | 48 interfaces, OSPF, small ACLs, logging |
+| `lg` | ~700 KB | 918 KB avg | Core router | Multi-area OSPF, BGP (10 neighbours), large ACLs, QoS, crypto maps |
+| `xl` | 3–5 MB | 3.18 MB avg | DC core / firewall | Massive ACLs, VRFs, extensive BGP, prefix-lists, route-maps |
+| `2xl` | ~8 MB | 6.2 MB avg | Stress: hyperscale edge | 256 interfaces, 100 ACLs (~900 entries), 6 K static routes, 30 BGP, 50 VRFs |
+| `3xl` | ~16 MB | 12.7 MB avg | Stress: regional spine | 384 interfaces, 160 ACLs (~1150 entries), 12 K static routes, 40 BGP, 70 VRFs |
+| `4xl` | ~32 MB | 24.7 MB avg | Stress: SP core | 512 interfaces, 240 ACLs (~1500 entries), 24 K static routes, 60 BGP, 100 VRFs |
+| `5xl` | ~64 MB | 52.1 MB avg | Stress: pathological | 768 interfaces, 380 ACLs (~2000 entries), 48 K static routes, 100 BGP, 150 VRFs |
+| `6xl` | ~128 MB | 106.7 MB avg | Stress: max | 1024 interfaces, 600 ACLs (~2600 entries), 96 K static routes, 160 BGP, 220 VRFs |
 
-Default distribution (40/40/15/5) approximates a typical enterprise network. Override with `--distribution "small:N,medium:N,large:N,huge:N"` where values sum to 100.
+Default distribution (40/40/15/5) approximates a typical enterprise network. Override with `--distribution "sm:N,md:N,lg:N,xl:N,..."` where values sum to 100; any subset of the nine buckets may be specified.
 
 ### Per-device parameterisation
 
@@ -1163,7 +1168,7 @@ Each config has unique:
 - Banner motd text
 - Interface count and configuration appropriate to size bucket
 - ACL entry counts and content
-- For large/huge: route entries, route-maps, BGP neighbours, prefix-lists
+- For `lg` and above: route entries, route-maps, BGP neighbours, prefix-lists
 - Deterministic serial number (hash of hostname) — shared between `show version` and `show inventory`
 
 ### Determinism
@@ -1187,7 +1192,7 @@ Config generator. Runs once per test campaign.
 --port-start int               First port in the range (default 10000)
 --devices-per-ip int           Devices per IP (default 2500)
 --seed int64                   Random seed for determinism (default 42)
---distribution string          Size distribution (default "small:40,medium:40,large:15,huge:5")
+--distribution string          Size distribution (default "sm:40,md:40,lg:15,xl:5"; buckets: sm, md, lg, xl, 2xl, 3xl, 4xl, 5xl, 6xl)
 --username string              Manifest username (default "admin")
 --password string              Manifest password (default "admin")
 --enable-password string       Manifest enable password (default "enable123")
