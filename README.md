@@ -1239,6 +1239,21 @@ make bench
 make check
 ```
 
+#### Prettier output with gotestsum (optional)
+
+For more readable test output — colored per-package status lines, a clean summary, and only failures expanded — pipe `go test` through [gotestsum](https://github.com/gotestyourself/gotestsum):
+
+```bash
+# Ad-hoc, no install needed
+go run gotest.tools/gotestsum@latest --hide-summary=all ./...
+
+# Or install once and reuse
+go install gotest.tools/gotestsum@latest
+$(go env GOPATH)/bin/gotestsum --hide-summary=all ./...
+```
+
+This is purely a developer-experience swap — the underlying test run is identical to `go test`, so CI and `make test` stay on the standard toolchain.
+
 ### Test sample book
 
 36 runnable manual test procedures documented in [`FEATURE-TESTS.md`](FEATURE-TESTS.md), organised by feature:
