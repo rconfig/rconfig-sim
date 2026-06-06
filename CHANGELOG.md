@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [0.0.3] — 2026-06-06
 
+### Changed
+
+- Minimum supported Go is now **1.24** (required by `golang.org/x/crypto` and
+  `golang.org/x/sys`, and declared in `go.mod`). CI tests Go 1.24 and 1.25; the 1.22/1.23
+  matrix entries are removed since neither toolchain satisfies the `go 1.24.0` directive.
+
 ### Added
 
 - **Multi-vendor device-driver framework.** The SSH server now selects a per-device

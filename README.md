@@ -12,7 +12,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 
 [![CI](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-rconfig.com%2Frconfig--sim-D97757)](https://www.rconfig.com/rconfig-sim)
-[![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)]()
 [![Status](https://img.shields.io/badge/status-v1-brightgreen)]()
@@ -343,7 +343,7 @@ Measured against the reference VM (12 vCPU Intel i9-9900K, 48 GB RAM, virtio-net
 
 **Software:**
 
-- Go 1.22 or later (1.26+ recommended)
+- Go 1.24 or later (1.26+ recommended) — required by `golang.org/x/crypto` and `golang.org/x/sys`
 - `make`
 - `systemd` (v250+ for the unit semantics used)
 - `iproute2` (for `ip` command used by alias script)
