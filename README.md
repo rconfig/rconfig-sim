@@ -188,6 +188,35 @@ You cannot answer any of these with unit tests or a lab of ten devices. You need
   └─────────────────────────────────────────────────────────────┘
 ```
 
+### Device drivers (multi-vendor)
+
+The interactive session is not hardwired to Cisco IOS. Each device is served by a **driver** — a vendor/model personality selected per connection from the manifest `template` column (`cisco_ios`, `ciena_tl1`, …). The server resolves the driver once at session start (`driverFor(template)`) and hands it the channel; everything the client sees on the wire is the driver's doing.
+
+What stays **shared** across every driver, so behaviour and observability are uniform:
+
+- response-delay jitter and the three stream faults (`slow_response`, `disconnect_mid`, `malformed`)
+- zero-copy streaming of mmap'd bytes (`ConfigOutput`)
+- `bytes_sent_total` accounting and the `command_duration_seconds{command}` histogram
+
+What each driver **owns**:
+
+- the greeting and prompt (`host>` / `host#` vs a bare `<`)
+- how one command unit is read — a newline-terminated line vs a `;`-terminated TL1 block that may span physical lines
+- the command grammar and dispatch (Cisco prefix-matching `show …` vs TL1 `RTRV-*` / `ACT-USER`)
+- whether the SSH transport authenticates (`RequiresSSHAuth()` — consulted by `--ssh-auth=driver`)
+
+| Driver id (`template`) | Vendor | Prompt | SSH auth | Commands |
+|---|---|---|---|---|
+| `cisco_ios` | Cisco | `host>` / `host#` | password, then `enable` | `show …`, `terminal …`, `enable`, `exit` |
+| `ciena_tl1` | Ciena | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-*` |
+
+**Adding a vendor** is two small pieces, with no change to the core loop:
+
+1. **Runtime** — a `Driver` implementation in `internal/sshsrv/driver_<vendor>.go`, registered via `init()`. It declares its metric command labels (`Commands()`) and SSH-auth requirement (`RequiresSSHAuth()`), and implements `Serve()`, calling the shared `applyResponseDelay` / `emit` helpers for the response path.
+2. **Generator** — a `model` entry in the registry (`internal/configs/generator.go`) carrying the vendor, driver id, template file, and a deterministic data-builder, plus a `templates/<name>.tmpl`.
+
+The manifest's `vendor`/`template` columns are the wiring between the two halves: the generator writes them per model, the loader reads them onto each `Device`, and `driverFor` resolves the runtime driver — defaulting to `cisco_ios` for empty or unknown values, so pre-existing manifests behave exactly as before.
+
 ### Data flow for a single collection run
 
 ```
@@ -222,6 +251,28 @@ You cannot answer any of these with unit tests or a lab of ten devices. You need
     │    metric: active_sessions decremented
     ▼
 7.  rConfig stores snapshot, diffs against previous, persists
+```
+
+### Data flow for a Ciena TL1 device
+
+```
+1.  Worker opens SSH to 10.50.0.7:22001
+    │    --ssh-auth=none / driver → no password challenge (TL1-only)
+    │    --ssh-auth=password      → SSH password auth first
+    ▼
+2.  ciena_tl1 driver greets with "< "
+    ▼
+3.  Worker sends "ACT-USER::admin:CTAG1::admin;"
+    │    in-band login validated → "M  CTAG1 COMPLD" (carries the SID)
+    │    metric: command_duration_seconds{CmdTL1ActUser} observed
+    │    (any RTRV before a valid ACT-USER → "M  <ctag> DENY")
+    ▼
+4.  Worker sends "RTRV-EQPT::ALL:100;"
+    │    COMPLD header + mmap'd shelf inventory streamed zero-copy + ";"
+    │    metric: command_duration_seconds{CmdTL1RtrvEqpt} observed
+    │    metric: bytes_sent_total += len(inventory)
+    ▼
+5.  Worker disconnects → sessions_total{ok}, session_duration_seconds observed
 ```
 
 ### File layout on disk
@@ -1463,7 +1514,7 @@ sudo modprobe -r nf_conntrack 2>/dev/null || true
 
 **Possible v2 work, prioritised by likely rConfig value:**
 
-- Additional vendors (Juniper Junos, Arista EOS, HP/Aruba ProCurve) via per-vendor dispatch maps and template sets
+- More vendors on the [driver framework](#device-drivers-multi-vendor) (Juniper Junos, Arista EOS, HP/Aruba ProCurve) — each is one driver file plus a generator model entry, following the Ciena 6500 TL1 driver as the template
 - Config mutation support (`configure terminal`, `write memory`) for testing rConfig's push workflows
 - SSH public key auth
 - Per-device credential variation (manifest-driven) for credential rotation testing
