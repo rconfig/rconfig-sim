@@ -27,6 +27,19 @@ const (
 	CmdShowStartupConfig
 	CmdShowInventory
 	CmdExit
+
+	// TL1 (Ciena) command labels. Appended after the Cisco set so existing iota
+	// values are unchanged. These are the metric label values the cienaTL1
+	// driver can emit on rcfgsim_command_duration_seconds{command}.
+	CmdTL1Unknown
+	CmdTL1Deny
+	CmdTL1ActUser
+	CmdTL1RtrvEqpt
+	CmdTL1RtrvAlmAll
+	CmdTL1RtrvCondAll
+	CmdTL1RtrvActiveUser
+	CmdTL1RtrvSwVer
+	CmdTL1RtrvSys
 )
 
 // String returns the Go identifier form of the command. Used as a bounded
@@ -55,6 +68,24 @@ func (c Command) String() string {
 		return "CmdShowInventory"
 	case CmdExit:
 		return "CmdExit"
+	case CmdTL1Unknown:
+		return "CmdTL1Unknown"
+	case CmdTL1Deny:
+		return "CmdTL1Deny"
+	case CmdTL1ActUser:
+		return "CmdTL1ActUser"
+	case CmdTL1RtrvEqpt:
+		return "CmdTL1RtrvEqpt"
+	case CmdTL1RtrvAlmAll:
+		return "CmdTL1RtrvAlmAll"
+	case CmdTL1RtrvCondAll:
+		return "CmdTL1RtrvCondAll"
+	case CmdTL1RtrvActiveUser:
+		return "CmdTL1RtrvActiveUser"
+	case CmdTL1RtrvSwVer:
+		return "CmdTL1RtrvSwVer"
+	case CmdTL1RtrvSys:
+		return "CmdTL1RtrvSys"
 	default:
 		return "CmdUnknown"
 	}
@@ -170,6 +201,7 @@ func ResolveCommand(input string) (Command, string) {
 type Response struct {
 	Output                []byte
 	ConfigOutput          []byte // zero-copy mmap slice; nil if not applicable
+	Trailer               []byte // written after ConfigOutput (e.g. TL1 closing ";"); nil for Cisco
 	RequestEnablePassword bool
 	Close                 bool
 	ExitEnable            bool

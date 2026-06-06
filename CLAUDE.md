@@ -32,14 +32,15 @@ The project follows [Semantic Versioning 2.0.0](https://semver.org/) and [Keep a
 
 ### Breaking-change surface (assume external users depend on these)
 
-- Bucket labels: `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`, `5xl`, `6xl` (defined in [internal/configs/generator.go](internal/configs/generator.go))
-- `--distribution` string syntax (`bucket:weight,...`)
+- Model names (the `--distribution` / `size_bucket` keys in the `registry`, [internal/configs/generator.go](internal/configs/generator.go)): the Cisco size labels `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`, `5xl`, `6xl`, plus `ciena-6500-tl1`
+- Driver/template ids in the manifest `template` column (`cisco_ios`, `ciena_tl1`) — the runtime resolves the per-device driver from these (see `driverFor`, [internal/sshsrv/driver.go](internal/sshsrv/driver.go))
+- `--distribution` string syntax (`model:weight,...`)
 - All CLI flag names and defaults on both binaries
 - Manifest CSV header order
 - Prometheus metric names and label keys (cardinality is asserted by test — don't add new labels casually)
 - Systemd unit name `rcfg-sim@<IP>.service` and the env-file variable names it consumes
 - Default paths: `/etc/rcfg-sim/`, `/opt/rcfg-sim/`, host-key path
-- The set of recognised `show ...` commands and their abbreviations
+- The set of recognised commands per driver and their abbreviations (Cisco `show ...`; Ciena TL1 `RTRV-*` / `ACT-USER`)
 
 ## Commit style — Conventional Commits
 
@@ -111,9 +112,12 @@ Integration tests live behind build tag `integration` and run separately — the
 
 ## Working with the generator
 
-- Adding a bucket: append to `bucketOrder`, add a profile entry in `profiles`, and either create a `templates/<name>.tmpl` or register an alias in `templateAliases` so a bigger tier can reuse a smaller template. Bucket names are user-facing — see [README § Configuration templates](README.md#configuration-templates).
-- Increasing a profile's counts is non-breaking (file sizes drift); renaming or removing a bucket is breaking.
-- The deterministic test (`TestRunDeterministic`) hashes outputs across two runs with the same seed. Any change that alters template output for a given seed will fail this test — bump the test fixture only when the diff is intentional.
+- The generator is driven by a `registry` of `model` entries ([internal/configs/generator.go](internal/configs/generator.go)). Each model carries its manifest `vendor`/`template` strings, the template file to render, and a per-vendor data-builder. The Cisco size buckets are derived mechanically from `profiles` + `templateAliases`; `modelOrder` is the canonical iteration order (Cisco buckets first, unchanged, then non-Cisco models appended).
+- Adding a Cisco size bucket: append to `bucketOrder`, add a `profiles` entry, and either create a `templates/<name>.tmpl` or register an alias in `templateAliases`. The registry picks it up automatically.
+- Adding a new vendor/model: add one `registry` entry (vendor, driver/template id, template file, builder) and a `templates/<name>.tmpl`; on the runtime side add one `Driver` implementation registered via `init()` in `internal/sshsrv/driver_<vendor>.go`. Model names and driver ids are user-facing — see [README § Configuration templates](README.md#configuration-templates).
+- Increasing a profile's counts is non-breaking (file sizes drift); renaming or removing a model is breaking.
+- The deterministic test (`TestRunDeterministic`, and `TestCienaDeterministic` for Ciena) hashes outputs across two runs with the same seed. Any change that alters template output for a given seed will fail this test — bump the test fixture only when the diff is intentional.
+- Cisco output must stay byte-identical when refactoring shared machinery. The integration characterization tests ([internal/sshsrv/characterization_test.go](internal/sshsrv/characterization_test.go)) pin the greeting, enable-mode flow, and session close — run `go test -tags integration ./...` before and after.
 
 ## When in doubt
 

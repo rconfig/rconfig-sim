@@ -20,6 +20,9 @@ import (
 type sessionCtx struct {
 	ch             ssh.Channel
 	dev            *configs.Device
+	driver         Driver
+	username       string // accepted login username (for in-band auth, e.g. TL1 ACT-USER)
+	password       string // accepted login password (empty = accept any)
 	enablePassword string
 	delayMinMS     int
 	delayMaxMS     int
@@ -29,151 +32,6 @@ type sessionCtx struct {
 	outcome        *sessionOutcome
 	faults         *fault.Set
 	rawConn        net.Conn // for hard-close (disconnect_mid) fault
-}
-
-// runShell is the per-channel interactive loop. It does line editing with echo
-// so the `ssh` CLI client is usable, reads one line at a time, resolves to a
-// Command, applies a uniform response delay, and writes back the response.
-//
-// It returns when the channel closes, the client requests exit, or a read error
-// occurs. Channel close is the caller's responsibility. Metrics hooks are
-// inline so the hot path has no extra indirection.
-func runShell(ctx *sessionCtx) {
-	state := &State{
-		Hostname:    ctx.dev.Hostname,
-		Serial:      ctx.dev.SerialNumber,
-		ConfigBytes: ctx.dev.Data,
-	}
-
-	writeAndCount(ctx, []byte("\r\n"))
-	writeAndCount(ctx, []byte(ctx.dev.Hostname+" line 0 is now available\r\n"))
-	writeAndCount(ctx, []byte("\r\n"))
-
-	for {
-		prompt := state.Hostname + ">"
-		if state.EnableMode {
-			prompt = state.Hostname + "#"
-		}
-		if _, err := writeAndCount(ctx, []byte(prompt)); err != nil {
-			return
-		}
-
-		line, err := readLine(ctx.ch, true)
-		if err != nil {
-			// Mid-session read error (EOF / reset) with no explicit exit
-			// command ⇒ classify as disconnect. Authoritative exit commands
-			// return via resp.Close below and leave outcome="ok".
-			if ctx.outcome != nil {
-				ctx.outcome.Set("disconnect")
-			}
-			return
-		}
-		cmdStart := time.Now()
-		cmd, canonical := ResolveCommand(line)
-
-		delayMS := ctx.delayMinMS
-		if ctx.delayMaxMS > ctx.delayMinMS {
-			delayMS += ctx.rng.Intn(ctx.delayMaxMS - ctx.delayMinMS + 1)
-		}
-		// slow_response fault: multiply delay by uniform[10,50], cap at 60s.
-		// Guarantee at least 10ms of base so the multiplier is observable
-		// even when the operator configured --response-delay-ms-max=0.
-		if ctx.faults.Roll(ctx.rng, fault.TypeSlowResponse) {
-			multiplier := 10 + ctx.rng.Intn(41) // inclusive 10..50
-			if delayMS < 10 {
-				delayMS = 10
-			}
-			delayMS *= multiplier
-			if delayMS > 60000 {
-				delayMS = 60000
-			}
-			if ctx.metrics != nil {
-				ctx.metrics.FaultsInjected.WithLabelValues(fault.TypeSlowResponse.String()).Inc()
-			}
-		}
-		if delayMS > 0 {
-			time.Sleep(time.Duration(delayMS) * time.Millisecond)
-		}
-
-		resp := Dispatch(cmd, canonical, state)
-
-		if resp.RequestEnablePassword {
-			if _, err := writeAndCount(ctx, []byte("Password: ")); err != nil {
-				return
-			}
-			pw, err := readLine(ctx.ch, false)
-			if err != nil {
-				if ctx.outcome != nil {
-					ctx.outcome.Set("disconnect")
-				}
-				return
-			}
-			if pw == ctx.enablePassword {
-				state.EnableMode = true
-			} else {
-				writeAndCount(ctx, []byte("% Access denied\r\n"))
-			}
-			observeCmd(ctx, cmd, cmdStart)
-			continue
-		}
-
-		if len(resp.Output) > 0 {
-			if _, err := writeAndCount(ctx, resp.Output); err != nil {
-				return
-			}
-		}
-		if len(resp.ConfigOutput) > 0 {
-			// disconnect_mid: write a 20-40% prefix then hard-RST the TCP conn.
-			// Happens before any malformed check because the connection is
-			// going away anyway. Observe the command duration first so phase 5
-			// metrics still reflect work the dispatcher did.
-			if ctx.faults.Roll(ctx.rng, fault.TypeDisconnectMid) {
-				window := 20 + ctx.rng.Intn(21) // 20..40 inclusive
-				n := len(resp.ConfigOutput) * window / 100
-				_, _ = writeAndCount(ctx, resp.ConfigOutput[:n])
-				if ctx.metrics != nil {
-					ctx.metrics.FaultsInjected.WithLabelValues(fault.TypeDisconnectMid.String()).Inc()
-				}
-				if ctx.outcome != nil {
-					ctx.outcome.Set("disconnect")
-				}
-				observeCmd(ctx, cmd, cmdStart)
-				hardCloseTCP(ctx.rawConn)
-				return
-			}
-
-			// malformed: corrupt the stream in one of three ways. Preserves
-			// the zero-copy hot path for before/after segments; only the
-			// perturbation itself allocates (bit flip = 1 byte, inject = ~60
-			// byte junk marker, truncate = no allocation).
-			if ctx.faults.Roll(ctx.rng, fault.TypeMalformed) {
-				if err := writeMalformed(ctx, resp.ConfigOutput); err != nil {
-					return
-				}
-				if ctx.metrics != nil {
-					ctx.metrics.FaultsInjected.WithLabelValues(fault.TypeMalformed.String()).Inc()
-				}
-			} else {
-				// Hot path: direct write of mmap'd bytes. Zero copy.
-				if _, err := writeAndCount(ctx, resp.ConfigOutput); err != nil {
-					return
-				}
-			}
-			// Trailing CRLF so the next prompt lands on a fresh line.
-			if _, err := writeAndCount(ctx, []byte("\r\n")); err != nil {
-				return
-			}
-		}
-		observeCmd(ctx, cmd, cmdStart)
-
-		if resp.ExitEnable {
-			state.EnableMode = false
-			continue
-		}
-		if resp.Close {
-			return
-		}
-	}
 }
 
 // writeAndCount writes to the channel and increments the bytes_sent counter

@@ -16,7 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.22', '1.23', '1.24']
+        # x/crypto and x/sys (and go.mod) require Go 1.24; test the floor + latest.
+        go: ['1.24', '1.25']
     steps:
       - name: Checkout
         uses: actions/checkout@v4

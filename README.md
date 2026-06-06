@@ -12,7 +12,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 
 [![CI](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-rconfig.com%2Frconfig--sim-D97757)](https://www.rconfig.com/rconfig-sim)
-[![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)]()
 [![Status](https://img.shields.io/badge/status-v1-brightgreen)]()
@@ -52,7 +52,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 
 ## What this is and isn't
 
-**It is:** a purpose-built Go SSH server that emulates Cisco IOS devices well enough to satisfy rConfig's standard collection flow. It is designed to run at extreme density — tens of thousands of listeners on a single host — with bounded memory, zero-copy config delivery, and realistic timing characteristics. It emits Prometheus metrics covering session lifecycle, throughput, and fault activity. It supports deliberate fault injection to exercise rConfig's error handling paths.
+**It is:** a purpose-built Go SSH server that emulates network devices well enough to satisfy rConfig's standard collection flow — Cisco IOS by default, with a pluggable per-device driver framework that also ships a Ciena 6500 TL1 personality. It is designed to run at extreme density — tens of thousands of listeners on a single host — with bounded memory, zero-copy config delivery, and realistic timing characteristics. It emits Prometheus metrics covering session lifecycle, throughput, and fault activity. It supports deliberate fault injection to exercise rConfig's error handling paths.
 
 **It isn't:** a full Cisco IOS emulator, a network topology simulator (no routing, no data plane, no control plane), or a replacement for GNS3/EVE-NG/Containerlab. It doesn't do SSH key auth, VRF separation, or anything past the ten-or-so commands rConfig-sim actually issues. The point is to load-test an NMS, not to run virtual labs.
 
@@ -85,6 +85,7 @@ You cannot answer any of these with unit tests or a lab of ten devices. You need
 - **Fault injection** — four independent fault types (auth_fail, disconnect_mid, slow_response, malformed) with per-session RNG and verified zero overhead when disabled
 - **Systemd-native operation** — one service instance per IP, independent restart, drain, and log streams
 - **Cisco-style command parsing** — prefix matching (`sh run` → `show running-config`), ambiguity detection, enable mode, deterministic serial numbers
+- **Pluggable multi-vendor drivers** — per-device personality selected from the manifest; ships Cisco IOS and a Ciena 6500 TL1 model (`<` prompt, in-band `ACT-USER` login, `;`-terminated `RTRV-*` verbs). New vendors are one driver file plus one generator model entry.
 - **Fully static binaries** — `CGO_ENABLED=0`, no runtime dependencies beyond glibc 2.34
 - **36 runnable manual test samples** covering every feature path
 
@@ -187,6 +188,35 @@ You cannot answer any of these with unit tests or a lab of ten devices. You need
   └─────────────────────────────────────────────────────────────┘
 ```
 
+### Device drivers (multi-vendor)
+
+The interactive session is not hardwired to Cisco IOS. Each device is served by a **driver** — a vendor/model personality selected per connection from the manifest `template` column (`cisco_ios`, `ciena_tl1`, …). The server resolves the driver once at session start (`driverFor(template)`) and hands it the channel; everything the client sees on the wire is the driver's doing.
+
+What stays **shared** across every driver, so behaviour and observability are uniform:
+
+- response-delay jitter and the three stream faults (`slow_response`, `disconnect_mid`, `malformed`)
+- zero-copy streaming of mmap'd bytes (`ConfigOutput`)
+- `bytes_sent_total` accounting and the `command_duration_seconds{command}` histogram
+
+What each driver **owns**:
+
+- the greeting and prompt (`host>` / `host#` vs a bare `<`)
+- how one command unit is read — a newline-terminated line vs a `;`-terminated TL1 block that may span physical lines
+- the command grammar and dispatch (Cisco prefix-matching `show …` vs TL1 `RTRV-*` / `ACT-USER`)
+- whether the SSH transport authenticates (`RequiresSSHAuth()` — consulted by `--ssh-auth=driver`)
+
+| Driver id (`template`) | Vendor | Prompt | SSH auth | Commands |
+|---|---|---|---|---|
+| `cisco_ios` | Cisco | `host>` / `host#` | password, then `enable` | `show …`, `terminal …`, `enable`, `exit` |
+| `ciena_tl1` | Ciena | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-*` |
+
+**Adding a vendor** is two small pieces, with no change to the core loop:
+
+1. **Runtime** — a `Driver` implementation in `internal/sshsrv/driver_<vendor>.go`, registered via `init()`. It declares its metric command labels (`Commands()`) and SSH-auth requirement (`RequiresSSHAuth()`), and implements `Serve()`, calling the shared `applyResponseDelay` / `emit` helpers for the response path.
+2. **Generator** — a `model` entry in the registry (`internal/configs/generator.go`) carrying the vendor, driver id, template file, and a deterministic data-builder, plus a `templates/<name>.tmpl`.
+
+The manifest's `vendor`/`template` columns are the wiring between the two halves: the generator writes them per model, the loader reads them onto each `Device`, and `driverFor` resolves the runtime driver — defaulting to `cisco_ios` for empty or unknown values, so pre-existing manifests behave exactly as before.
+
 ### Data flow for a single collection run
 
 ```
@@ -221,6 +251,28 @@ You cannot answer any of these with unit tests or a lab of ten devices. You need
     │    metric: active_sessions decremented
     ▼
 7.  rConfig stores snapshot, diffs against previous, persists
+```
+
+### Data flow for a Ciena TL1 device
+
+```
+1.  Worker opens SSH to 10.50.0.7:22001
+    │    --ssh-auth=none / driver → no password challenge (TL1-only)
+    │    --ssh-auth=password      → SSH password auth first
+    ▼
+2.  ciena_tl1 driver greets with "< "
+    ▼
+3.  Worker sends "ACT-USER::admin:CTAG1::admin;"
+    │    in-band login validated → "M  CTAG1 COMPLD" (carries the SID)
+    │    metric: command_duration_seconds{CmdTL1ActUser} observed
+    │    (any RTRV before a valid ACT-USER → "M  <ctag> DENY")
+    ▼
+4.  Worker sends "RTRV-EQPT::ALL:100;"
+    │    COMPLD header + mmap'd shelf inventory streamed zero-copy + ";"
+    │    metric: command_duration_seconds{CmdTL1RtrvEqpt} observed
+    │    metric: bytes_sent_total += len(inventory)
+    ▼
+5.  Worker disconnects → sessions_total{ok}, session_duration_seconds observed
 ```
 
 ### File layout on disk
@@ -291,7 +343,7 @@ Measured against the reference VM (12 vCPU Intel i9-9900K, 48 GB RAM, virtio-net
 
 **Software:**
 
-- Go 1.22 or later (1.26+ recommended)
+- Go 1.24 or later (1.26+ recommended) — required by `golang.org/x/crypto` and `golang.org/x/sys`
 - `make`
 - `systemd` (v250+ for the unit semantics used)
 - `iproute2` (for `ip` command used by alias script)
@@ -1155,6 +1207,49 @@ Generated configs span nine size buckets. The first four match typical enterpris
 
 Default distribution (40/40/15/5) approximates a typical enterprise network. Override with `--distribution "sm:N,md:N,lg:N,xl:N,..."` where values sum to 100; any subset of the nine buckets may be specified.
 
+### Non-Cisco models
+
+The generator is driven by a **model registry**, of which the nine Cisco size buckets above are the initial entries. Each model carries its own vendor, runtime driver, and template, so the `--distribution` syntax doubles as a vendor selector: a model name that isn't a Cisco bucket simply selects a different personality.
+
+| Model | Vendor | Driver | Protocol | Payload |
+|---|---|---|---|---|
+| `ciena-6500-tl1` | Ciena | `ciena_tl1` | TL1 over SSH | `RTRV-EQPT::ALL` shelf inventory (7-slot 6500), mmap-streamed |
+
+Mix it into any run, e.g. `--distribution "sm:50,ciena-6500-tl1:50"`. Ciena rows in the manifest carry `vendor=Ciena, template=ciena_tl1`; Cisco rows are unchanged.
+
+The Ciena 6500 personality is **not** Cisco IOS. After SSH connects it presents a bare `<` prompt and requires an in-band TL1 login before any command works:
+
+```
+< ACT-USER::admin:CTAG1::admin;
+
+   CIENA-LAX-1001 26-02-17 14:27:08
+M  CTAG1 COMPLD
+   /*AUTHTYPE=LOCAL*/
+;
+< RTRV-EQPT::ALL:100;
+
+   CIENA-LAX-1001 26-02-17 14:27:10
+M  100 COMPLD
+   "SHELF-1::PROVISIONED,TYPE=6500-7SLOT,...:IS-NR"
+   "SLOT-1:OTR2,...:IS-NR"
+   ...
+;
+```
+
+Commands are terminated by `;` (and may span lines). Recognised verbs: `ACT-USER`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`, `RTRV-SW-VER`, `RTRV-SYS`. Anything before a valid `ACT-USER`, or any unrecognised verb, returns a TL1 `DENY` block.
+
+#### SSH-layer auth vs in-band TL1 auth
+
+Real 6500 deployments differ in whether the SSH transport itself challenges for a password. Both patterns are supported via the server's `--ssh-auth` flag:
+
+| `--ssh-auth` | SSH transport | Then | Models |
+|---|---|---|---|
+| `password` (default) | password auth required | `<` prompt → `ACT-USER` | **Scenario B**: interactive SSH login *and* TL1 login |
+| `driver` | per-driver: Cisco requires it, Ciena does not | `<` prompt → `ACT-USER` | **Scenario A** for Ciena, normal auth for Cisco — correct for mixed fleets |
+| `none` | no auth (any/none accepted) | `<` prompt → `ACT-USER` | **Scenario A**: TL1 `ACT-USER` is the only gate |
+
+In a no-auth mode (`none`, or `driver` for a Ciena device) the SSH client connects without a password prompt and lands directly on `<`; `ACT-USER` is the sole authentication. In `password` mode the client authenticates at the SSH layer first, then again in-band via `ACT-USER`. Each driver declares its requirement through `RequiresSSHAuth()` (Cisco IOS `true`, Ciena TL1 `false`), which is what `driver` mode consults.
+
 ### Per-device parameterisation
 
 Each config has unique:
@@ -1210,6 +1305,7 @@ SSH server. One instance per IP alias.
 --username string              Accepted username; empty = any (default "admin")
 --password string              Accepted password; empty = any (default "admin")
 --enable-password string       Enable mode password (default "enable123")
+--ssh-auth string              SSH transport auth: password (all) | driver (Cisco yes, Ciena TL1 no) | none (default "password")
 --metrics-addr string          HTTP addr for /metrics and /healthz (default "0.0.0.0:9100")
 --response-delay-ms-min int    Minimum response delay (default 50)
 --response-delay-ms-max int    Maximum response delay (default 500)
@@ -1388,7 +1484,6 @@ sudo modprobe -r nf_conntrack 2>/dev/null || true
 **v1 scope deliberately excludes:**
 
 - SSH public key authentication (password only)
-- Multiple vendors (Cisco IOS only)
 - IPv6 listening addresses
 - TLS (SSH is cleartext-protocol-over-TCP by nature; no TLS wrapper)
 - SCP/SFTP file transfer (rConfig uses `show running-config`, not file copy)
@@ -1419,7 +1514,7 @@ sudo modprobe -r nf_conntrack 2>/dev/null || true
 
 **Possible v2 work, prioritised by likely rConfig value:**
 
-- Additional vendors (Juniper Junos, Arista EOS, HP/Aruba ProCurve) via per-vendor dispatch maps and template sets
+- More vendors on the [driver framework](#device-drivers-multi-vendor) (Juniper Junos, Arista EOS, HP/Aruba ProCurve) — each is one driver file plus a generator model entry, following the Ciena 6500 TL1 driver as the template
 - Config mutation support (`configure terminal`, `write memory`) for testing rConfig's push workflows
 - SSH public key auth
 - Per-device credential variation (manifest-driven) for credential rotation testing

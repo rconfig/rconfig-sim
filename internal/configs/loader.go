@@ -15,6 +15,8 @@ type Device struct {
 	Hostname     string
 	IP           string
 	Port         int
+	Vendor       string // manifest "vendor" column, e.g. "Cisco" / "Ciena"
+	Driver       string // manifest "template" column = runtime driver id, e.g. "cisco_ios" / "ciena_tl1"
 	SizeBucket   string
 	ConfigPath   string
 	Data         []byte
@@ -64,6 +66,8 @@ func LoadForListener(manifestPath, listenIP string, portStart, portCount int) ([
 			Hostname:     row[0],
 			IP:           row[1],
 			Port:         port,
+			Vendor:       row[3],
+			Driver:       row[4],
 			ConfigPath:   row[8],
 			SizeBucket:   row[9],
 			SerialNumber: serialFor(row[0]),

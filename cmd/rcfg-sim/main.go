@@ -30,6 +30,7 @@ func main() {
 	flag.StringVar(&cfg.Username, "username", "admin", "accepted SSH username (currently informational; auth is password-only)")
 	flag.StringVar(&cfg.Password, "password", "admin", "accepted SSH password (empty = accept any)")
 	flag.StringVar(&cfg.EnablePassword, "enable-password", "enable123", "enable-mode password")
+	flag.StringVar(&cfg.SSHAuthMode, "ssh-auth", "password", "SSH transport auth: password (all devices) | driver (per-driver: Cisco yes, Ciena TL1 no) | none (in-band auth only)")
 	flag.IntVar(&cfg.ResponseDelayMinMS, "response-delay-ms-min", 50, "min per-command response delay (ms)")
 	flag.IntVar(&cfg.ResponseDelayMaxMS, "response-delay-ms-max", 500, "max per-command response delay (ms)")
 	flag.IntVar(&cfg.MaxConcurrentSessions, "max-concurrent-sessions", 5000, "semaphore cap on concurrent sessions")
