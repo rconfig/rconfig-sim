@@ -54,6 +54,51 @@ func init() {
 	compiledOnce = template.Must(template.New("root").Funcs(templateFuncMap).ParseFS(templateFS, "templates/*.tmpl"))
 }
 
+// model is one fully-qualified, generatable device model. The registry key is
+// the model name used in --distribution and written to the manifest size_bucket
+// column. Each model carries its manifest vendor/template strings, the embedded
+// template to render, and a per-vendor data-builder.
+//
+// Adding a vendor/model is one registry entry plus a template file — the
+// generator never special-cases a vendor beyond this struct.
+type model struct {
+	name     string
+	vendor   string // manifest "vendor" column
+	template string // manifest "template" column = runtime driver id
+	tmplFile string // embedded template name to ExecuteTemplate
+	build    func(cfg Config, index int, m model) any
+}
+
+// registry maps a model name to its model. The Cisco size buckets are derived
+// mechanically from the existing profiles + templateAliases so their resolved
+// template, builder, and manifest output are byte-identical to before the
+// registry existed. The Ciena 6500 is appended as the first non-Cisco model.
+var registry = func() map[string]model {
+	r := make(map[string]model, len(bucketOrder)+1)
+	for _, name := range bucketOrder {
+		tmplFile := name + ".tmpl"
+		if alias, ok := templateAliases[name]; ok {
+			tmplFile = alias
+		}
+		r[name] = model{
+			name:     name,
+			vendor:   "Cisco",
+			template: "cisco_ios",
+			tmplFile: tmplFile,
+			build: func(cfg Config, index int, m model) any {
+				return buildDeviceData(cfg, index, m.name)
+			},
+		}
+	}
+	r[cienaModelName] = cienaModel()
+	return r
+}()
+
+// modelOrder is the canonical iteration order: the Cisco buckets in their
+// existing order, then non-Cisco models appended. Keeping Cisco first and
+// unchanged is what preserves deterministic assignment for legacy invocations.
+var modelOrder = append(append([]string{}, bucketOrder...), cienaModelName)
+
 // profile holds the per-size-bucket generation counts.
 type profile struct {
 	deviceKind           string
@@ -227,9 +272,14 @@ func (s Summary) String() string {
 	fmt.Fprintf(&sb, "generator summary: count=%d elapsed=%s total_bytes=%d (%.2f MB)\n",
 		s.Count, s.Elapsed.Round(time.Millisecond), s.TotalBytes, float64(s.TotalBytes)/(1024*1024))
 	fmt.Fprintln(&sb, "per-bucket distribution:")
-	for _, b := range bucketOrder {
+	for _, b := range modelOrder {
 		bs := s.PerBucket[b]
 		w := s.Weights[b]
+		// Suppress models that are absent from this run (no target, none
+		// realised) so legacy Cisco-only output is unchanged.
+		if w == 0 && bs.Target == 0 && bs.Realised == 0 {
+			continue
+		}
 		targetPct := float64(w)
 		realisedPct := 0.0
 		if s.Count > 0 {
@@ -262,8 +312,8 @@ func parseDistribution(s string) (map[string]int, error) {
 			return nil, fmt.Errorf("distribution token %q: want bucket:weight", tok)
 		}
 		name := strings.TrimSpace(parts[0])
-		if _, ok := profiles[name]; !ok {
-			return nil, fmt.Errorf("unknown bucket %q (valid: %s)", name, strings.Join(bucketOrder, ", "))
+		if _, ok := registry[name]; !ok {
+			return nil, fmt.Errorf("unknown model %q (valid: %s)", name, strings.Join(modelOrder, ", "))
 		}
 		w, err := strconv.Atoi(strings.TrimSpace(parts[1]))
 		if err != nil {
@@ -281,7 +331,7 @@ func parseDistribution(s string) (map[string]int, error) {
 	if total != 100 {
 		return nil, fmt.Errorf("distribution weights must sum to 100, got %d", total)
 	}
-	for _, b := range bucketOrder {
+	for _, b := range modelOrder {
 		if _, ok := weights[b]; !ok {
 			weights[b] = 0
 		}
@@ -294,17 +344,17 @@ func parseDistribution(s string) (map[string]int, error) {
 func stratifiedCounts(total int, weights map[string]int) map[string]int {
 	counts := map[string]int{}
 	allocated := 0
-	for _, b := range bucketOrder {
+	for _, b := range modelOrder {
 		c := total * weights[b] / 100
 		counts[b] = c
 		allocated += c
 	}
-	// Give leftover to the bucket with the highest weight (stable: tie broken by order).
+	// Give leftover to the model with the highest weight (stable: tie broken by order).
 	rem := total - allocated
 	if rem > 0 {
 		var top string
 		topW := -1
-		for _, b := range bucketOrder {
+		for _, b := range modelOrder {
 			if weights[b] > topW {
 				top = b
 				topW = weights[b]
@@ -323,7 +373,7 @@ func buildAssignments(counts map[string]int, rng *rand.Rand) []string {
 		total += c
 	}
 	out := make([]string, 0, total)
-	for _, b := range bucketOrder {
+	for _, b := range modelOrder {
 		for i := 0; i < counts[b]; i++ {
 			out = append(out, b)
 		}
@@ -394,7 +444,8 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 			defer wg.Done()
 			for i := range jobs {
 				bucket := assignments[i]
-				data := buildDeviceData(cfg, i, bucket)
+				m := registry[bucket]
+				data := m.build(cfg, i, m)
 
 				filename := fmt.Sprintf("device-%05d.cfg", i)
 				path := filepath.Join(cfg.OutputDir, filename)
@@ -405,11 +456,7 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 					continue
 				}
 				counter := &byteCounter{w: f}
-				tmplName := bucket + ".tmpl"
-				if alias, ok := templateAliases[bucket]; ok {
-					tmplName = alias
-				}
-				if rerr := compiledOnce.ExecuteTemplate(counter, tmplName, data); rerr != nil {
+				if rerr := compiledOnce.ExecuteTemplate(counter, m.tmplFile, data); rerr != nil {
 					f.Close()
 					results[i] = result{err: fmt.Errorf("render %s (%s): %w", path, bucket, rerr)}
 					continue
@@ -420,7 +467,7 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 				}
 
 				results[i] = result{
-					hostname: data.Hostname,
+					hostname: modelHostname(data),
 					ip:       ipPlusOffset(cfg.IPBase, i/cfg.DevicesPerIP),
 					port:     cfg.PortStart + (i % cfg.DevicesPerIP),
 					bucket:   bucket,
@@ -462,14 +509,15 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 		PerBucket: map[string]bucketStats{},
 		Weights:   weights,
 	}
-	for _, b := range bucketOrder {
+	for _, b := range modelOrder {
 		summary.PerBucket[b] = bucketStats{Target: counts[b]}
 	}
 
 	for i, r := range results {
+		m := registry[r.bucket]
 		if err := w.Write([]string{
 			r.hostname, r.ip, strconv.Itoa(r.port),
-			"Cisco", "cisco_ios",
+			m.vendor, m.template,
 			cfg.Username, cfg.Password, cfg.EnablePassword,
 			r.path, r.bucket,
 		}); err != nil {
@@ -492,7 +540,7 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 	// Verify distribution within ±1 percentage point (tolerance widened from ±1 integer
 	// to ±1 percentage point, since below ~100 devices any rounding blows the stricter bound).
 	var offenders []string
-	for _, b := range bucketOrder {
+	for _, b := range modelOrder {
 		bs := summary.PerBucket[b]
 		target := float64(weights[b])
 		realised := 100 * float64(bs.Realised) / float64(summary.Count)

@@ -6,6 +6,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.3] — 2026-06-06
+
+### Added
+
+- **Multi-vendor device-driver framework.** The SSH server now selects a per-device
+  personality ("driver") from the manifest `template` column at session start, so new
+  vendors/models are added as one self-contained driver file plus one generator model
+  entry. The Cisco IOS behaviour is preserved byte-for-byte (extracted verbatim into the
+  `cisco_ios` driver); the manifest `vendor`/`template` columns — previously written but
+  unused at runtime — are now the live wiring. No CSV schema change.
+- **Ciena 6500 7-slot optical model (`ciena-6500-tl1`).** A TL1 personality reached over
+  SSH: a bare `<` prompt, an in-band `ACT-USER::<user>:<ctag>::<pass>;` login gate (commands
+  before login return TL1 `DENY`), and `;`-terminated `RTRV-*` verbs returning `COMPLD`
+  blocks. Supported verbs: `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`,
+  `RTRV-SW-VER`, `RTRV-SYS`. The generator emits a deterministic `RTRV-EQPT::ALL` shelf
+  inventory per device, mmap-streamed zero-copy at runtime (and subject to the same fault
+  injection as Cisco config streams). Select it via `--distribution`, e.g.
+  `--distribution sm:50,ciena-6500-tl1:50`.
+- New `command` label values on `rcfgsim_command_duration_seconds` for the TL1 verbs
+  (`CmdTL1ActUser`, `CmdTL1RtrvEqpt`, …), pre-registered at zero. No new metric names or
+  label keys; cardinality stays within the asserted bound.
+- **`--ssh-auth` server flag** to model both real-world TL1 access patterns:
+  `password` (default — SSH password auth for every device, unchanged), `driver` (per-driver:
+  Cisco authenticates at the SSH layer, Ciena TL1 does not — `ACT-USER` is the only gate), and
+  `none` (no SSH auth for any device). Each driver declares `RequiresSSHAuth()`; `driver` mode
+  honours it so mixed Cisco/Ciena fleets behave correctly. In a no-auth mode the SSH client
+  connects unchallenged and authenticates in-band; the `auth_fail` fault and `auth_attempts`
+  metric do not apply.
+
 ## [0.0.2] — 2026-05-19
 
 Bucket-label rename and five new stress-test size tiers. Breaking change: every `--distribution` string and every `size_bucket` value in existing manifests is invalidated. Migration is a mechanical rename — see below.
@@ -84,6 +113,7 @@ Initial public release. High-density Cisco IOS SSH simulator for load testing [r
 
 See [README § Known limitations](README.md#known-limitations) for the full list.
 
-[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.3
 [0.0.2]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.2
 [0.0.1]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.1

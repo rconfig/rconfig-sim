@@ -1,0 +1,17 @@
+{{- /* TL1 RTRV-EQPT::ALL inventory payload for a Ciena 6500 7-slot shelf.
+       The ciena_tl1 runtime driver streams this body between a COMPLD header
+       and the ";" terminator, so this template emits only the quoted AID lines. */ -}}
+   "SHELF-1::PROVISIONED,TYPE=6500-7SLOT,SN={{ .ShelfSerial }},SWVER={{ .SwVersion }},IP={{ .NodeIP }}:IS-NR"
+{{ range .Slots -}}
+{{ if .Equipped -}}
+{{ $slot := .Slot -}}
+   "SLOT-{{ .Slot }}:{{ .CardType }},CLEI={{ .CLEI }},SN={{ .Serial }},PN={{ .PartNum }}:{{ .State }}"
+{{ range .Ports -}}
+{{ if .Equipped -}}
+   "SLOT-{{ $slot }}-{{ .Port }}::OPTIC={{ .OpticType }},WL={{ .Wavelength }},SN={{ .Serial }}:{{ .State }}"
+{{ end -}}
+{{ end -}}
+{{ else -}}
+   "SLOT-{{ .Slot }}::UNEQUIPPED:OOS-AUMA"
+{{ end -}}
+{{ end -}}

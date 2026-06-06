@@ -27,14 +27,21 @@ import (
 
 // Config is everything the Server needs to run. Only fields supplied by the CLI.
 type Config struct {
-	ListenIP              string
-	PortStart             int
-	PortCount             int
-	ManifestPath          string
-	HostKeyPath           string
-	Username              string
-	Password              string
-	EnablePassword        string
+	ListenIP       string
+	PortStart      int
+	PortCount      int
+	ManifestPath   string
+	HostKeyPath    string
+	Username       string
+	Password       string
+	EnablePassword string
+	// SSHAuthMode controls whether the SSH transport authenticates the client
+	// before the interactive session starts:
+	//   "password" (default) — every device requires SSH password auth.
+	//   "driver"             — the device's driver decides (Cisco yes, Ciena TL1 no).
+	//   "none"               — no SSH auth for any device; in-band auth only.
+	// Empty is treated as "password" for backward compatibility.
+	SSHAuthMode           string
 	ResponseDelayMinMS    int
 	ResponseDelayMaxMS    int
 	MaxConcurrentSessions int
@@ -75,6 +82,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.PortCount <= 0 {
 		return nil, errors.New("port-count must be > 0")
 	}
+	switch cfg.SSHAuthMode {
+	case "", "password", "driver", "none":
+	default:
+		return nil, fmt.Errorf("invalid ssh-auth mode %q (want password|driver|none)", cfg.SSHAuthMode)
+	}
 
 	signer, err := loadOrGenerateHostKey(cfg.HostKeyPath)
 	if err != nil {
@@ -97,7 +109,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Server{
+	srv := &Server{
 		cfg:      cfg,
 		signer:   signer,
 		devices:  devMap,
@@ -108,7 +120,14 @@ func New(cfg Config) (*Server, error) {
 		cancel:   cancel,
 		totalMap: total,
 		metrics:  metrics.New(),
-	}, nil
+	}
+	// Pre-register the command_duration label values every registered driver can
+	// emit, so vendor-specific values (e.g. TL1) appear in /metrics at zero from
+	// the first scrape — the same guarantee metrics.KnownCommands gives Cisco.
+	for _, cmd := range registeredCommands() {
+		srv.metrics.CommandDuration.WithLabelValues(cmd)
+	}
+	return srv, nil
 }
 
 // Metrics returns the metrics registry — primarily for integration tests
@@ -232,6 +251,20 @@ func (s *Server) closeListeners() {
 	}
 }
 
+// requireSSHAuth decides whether the SSH transport must authenticate this
+// device's client before the interactive session starts, per the configured
+// SSHAuthMode. Empty mode is treated as "password".
+func (s *Server) requireSSHAuth(dev *configs.Device) bool {
+	switch s.cfg.SSHAuthMode {
+	case "none":
+		return false
+	case "driver":
+		return driverFor(dev.Driver).RequiresSSHAuth()
+	default: // "" or "password"
+		return true
+	}
+}
+
 func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 	defer conn.Close()
 
@@ -258,8 +291,9 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second)) // handshake deadline
 
-	serverConfig := &ssh.ServerConfig{
-		PasswordCallback: func(meta ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+	serverConfig := &ssh.ServerConfig{}
+	if s.requireSSHAuth(dev) {
+		serverConfig.PasswordCallback = func(meta ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
 			// auth_fail fault fires BEFORE password check so the rejection
 			// is indistinguishable from a real wrong-password case to the
 			// client. Increment both auth_attempts{fail} and faults_injected.
@@ -274,7 +308,12 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 			}
 			s.metrics.AuthAttempts.WithLabelValues("fail").Inc()
 			return nil, errors.New("invalid password")
-		},
+		}
+	} else {
+		// No SSH-layer auth: the client connects unchallenged and authenticates
+		// in-band (e.g. Ciena TL1 ACT-USER). The auth_fail fault and
+		// auth_attempts metric do not apply in this mode.
+		serverConfig.NoClientAuth = true
 	}
 	serverConfig.AddHostKey(s.signer)
 
@@ -382,6 +421,9 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *co
 	ctx := &sessionCtx{
 		ch:             ch,
 		dev:            dev,
+		driver:         driverFor(dev.Driver),
+		username:       s.cfg.Username,
+		password:       s.cfg.Password,
 		enablePassword: s.cfg.EnablePassword,
 		delayMinMS:     s.cfg.ResponseDelayMinMS,
 		delayMaxMS:     s.cfg.ResponseDelayMaxMS,
@@ -405,7 +447,7 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *co
 			if !shellStarted {
 				shellStarted = true
 				go func() {
-					runShell(ctx)
+					ctx.driver.Serve(ctx)
 					_ = ch.Close()
 				}()
 			}
