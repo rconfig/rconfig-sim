@@ -11,6 +11,7 @@
 Stand up 50,000 fake network devices on a single Linux host. Each one speaks real SSH, serves realistic multi-KB to multi-MB running-configs, and responds exactly like Cisco IOS — enough to exercise rConfig's scheduler, collectors, parser, diff engine, and storage pipeline under production-shaped load.
 
 [![CI](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-simdocs.rconfig.com-4f46e5)](https://simdocs.rconfig.com)
 [![Website](https://img.shields.io/badge/website-rconfig.com%2Frconfig--sim-D97757)](https://www.rconfig.com/rconfig-sim)
 [![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -18,7 +19,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 [![Status](https://img.shields.io/badge/status-v1-brightgreen)]()
 [![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
 
-**[Project website →](https://www.rconfig.com/rconfig-sim)**
+**[📖 Documentation →](https://simdocs.rconfig.com)** · **[Project website →](https://www.rconfig.com/rconfig-sim)**
 
 [Quickstart](#quickstart) · [Architecture](#architecture) · [Deployment](#full-deployment) · [Operations](#operational-runbook) · [Metrics](#metrics-reference) · [Faults](#fault-injection) · [Troubleshooting](#troubleshooting)
 
@@ -28,6 +29,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 
 ## Table of Contents
 
+- [Documentation](#documentation)
 - [What this is and isn't](#what-this-is-and-isnt)
 - [Why](#why)
 - [Features](#features)
@@ -47,6 +49,27 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Documentation
+
+The full guide lives at **[simdocs.rconfig.com](https://simdocs.rconfig.com)** — installation,
+configuration, the driver framework, fault injection, metrics, worked Cisco IOS and Ciena TL1
+examples, load-test scenarios, and the complete CLI reference.
+
+This README is the at-a-glance overview; the docs site goes deeper. Some good entry points:
+
+- [Quickstart](https://simdocs.rconfig.com/getting-started/quickstart/)
+- [Installation](https://simdocs.rconfig.com/installation/prerequisites/)
+- [Drivers & vendors](https://simdocs.rconfig.com/drivers/overview/) (Cisco IOS · Ciena TL1)
+- [CLI reference](https://simdocs.rconfig.com/reference/cli/)
+- [Using rcfg-sim with rConfig](https://simdocs.rconfig.com/examples/using-with-rconfig/)
+
+The docs site is open source and maintained separately at
+**[github.com/rconfig/rconfig-sim-docs](https://github.com/rconfig/rconfig-sim-docs)** — open
+issues or PRs there for documentation fixes and improvements. (Changes to the tool's behaviour,
+CLI, metrics, or drivers belong in *this* repo.)
 
 ---
 
@@ -1531,6 +1554,11 @@ None of the above are committed. Open an issue if any are blocking your use case
 
 Issues and PRs welcome at [github.com/rconfig/rconfig-sim](https://github.com/rconfig/rconfig-sim).
 
+> **Documentation changes** go to the docs repo instead:
+> [github.com/rconfig/rconfig-sim-docs](https://github.com/rconfig/rconfig-sim-docs) (which
+> publishes [simdocs.rconfig.com](https://simdocs.rconfig.com)). Keep this repo for the tool's
+> code, CLI, metrics, and drivers.
+
 **Before opening a PR:**
 
 - `make check` must pass (vet, fmt, lint, test)
@@ -1566,6 +1594,7 @@ MIT. See [LICENSE](LICENSE).
 </a>
 
 **[rconfig.com/rconfig-sim](https://www.rconfig.com/rconfig-sim)** — project landing page, release notes, and roadmap.
+**[simdocs.rconfig.com](https://simdocs.rconfig.com)** — full documentation.
 
 Built for [rConfig](https://www.rconfig.com) — network configuration management at scale.
 
