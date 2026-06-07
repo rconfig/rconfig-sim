@@ -1237,8 +1237,9 @@ The generator is driven by a **model registry**, of which the nine Cisco size bu
 | Model | Vendor | Driver | Protocol | Payload |
 |---|---|---|---|---|
 | `ciena-6500-tl1` | Ciena | `ciena_tl1` | TL1 over SSH | `RTRV-EQPT::ALL` shelf inventory (7-slot 6500), mmap-streamed |
+| `ciena-6500-tl1-gne` | Ciena | `ciena_tl1` | TL1 over SSH | Gateway NE fronting 2–5 Remote NEs; GNE + per-RNE inventories, mmap-streamed |
 
-Mix it into any run, e.g. `--distribution "sm:50,ciena-6500-tl1:50"`. Ciena rows in the manifest carry `vendor=Ciena, template=ciena_tl1`; Cisco rows are unchanged.
+Mix them into any run, e.g. `--distribution "sm:50,ciena-6500-tl1:50"`. Ciena rows in the manifest carry `vendor=Ciena, template=ciena_tl1`; Cisco rows are unchanged.
 
 The Ciena 6500 personality is **not** Cisco IOS. After SSH connects it presents a bare `<` prompt and requires an in-band TL1 login before any command works:
 
@@ -1259,7 +1260,27 @@ M  100 COMPLD
 ;
 ```
 
-Commands are terminated by `;` (and may span lines). Recognised verbs: `ACT-USER`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`, `RTRV-SW-VER`, `RTRV-SYS`. Anything before a valid `ACT-USER`, or any unrecognised verb, returns a TL1 `DENY` block.
+Commands are terminated by `;` (and may span lines). Recognised verbs: `ACT-USER`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`, `RTRV-SW-VER`, `RTRV-SYS`, `RTRV-NBR`. Anything before a valid `ACT-USER`, or any unrecognised verb, returns a TL1 `DENY` block.
+
+#### GNE / RNE topology (`ciena-6500-tl1-gne`)
+
+Real optical networks are reached through a **Gateway NE (GNE)** — the node you SSH into — which fronts several **Remote NEs (RNEs)** that have no direct management access of their own. The `ciena-6500-tl1-gne` model emulates this: each generated device is a GNE whose config also carries the inventories of 2–5 RNEs behind it.
+
+After login, `RTRV-NBR` lists the RNEs, and you address one by putting its TID in the command's TID field; the GNE returns that RNE's response (with the RNE's TID as the response SID). The same verb set works against any RNE.
+
+```
+< ACT-USER::admin:1::admin;          ← log into the GNE
+< RTRV-NBR:ALL:2;                     ← list the RNEs reachable through it
+   ...
+   "RNE-LIMERICK:PROTOCOL=OSC,REACHABLE=YES,STATE=IS-NR"
+   "RNE-GALWAY:PROTOCOL=OSC,REACHABLE=YES,STATE=IS-NR"
+;
+< RTRV-EQPT:RNE-LIMERICK:3;           ← inventory of a specific RNE (TID in field 2)
+< RTRV-ALM-ALL:RNE-LIMERICK:4;        ← alarms for that RNE
+< RTRV-EQPT::ALL:100;                 ← GNE-own inventory (empty TID, as before)
+```
+
+A TID that empty/`ALL`/the GNE's own SID is treated as local; an unknown or unreachable RNE TID returns `DENY`/`IIAC`. The TID-addressed short form `VERB:TID:CTAG;` and the strict `VERB::AID:CTAG;` form are both accepted. The standalone `ciena-6500-tl1` model is a GNE with no RNEs — `RTRV-NBR` returns an empty list.
 
 #### SSH-layer auth vs in-band TL1 auth
 

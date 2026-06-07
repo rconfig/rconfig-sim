@@ -40,6 +40,7 @@ const (
 	CmdTL1RtrvActiveUser
 	CmdTL1RtrvSwVer
 	CmdTL1RtrvSys
+	CmdTL1RtrvNbr
 )
 
 // String returns the Go identifier form of the command. Used as a bounded
@@ -86,6 +87,8 @@ func (c Command) String() string {
 		return "CmdTL1RtrvSwVer"
 	case CmdTL1RtrvSys:
 		return "CmdTL1RtrvSys"
+	case CmdTL1RtrvNbr:
+		return "CmdTL1RtrvNbr"
 	default:
 		return "CmdUnknown"
 	}
