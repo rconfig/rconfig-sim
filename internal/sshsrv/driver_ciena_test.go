@@ -23,19 +23,26 @@ func TestParseTL1(t *testing.T) {
 	cases := []struct {
 		raw      string
 		wantVerb string
+		wantTID  string
 		wantCtag string
 	}{
-		{"RTRV-EQPT::ALL:100", "RTRV-EQPT", "100"},
-		{"RTRV-ALM-ALL::ALL:101", "RTRV-ALM-ALL", "101"},
-		{"RTRV-SW-VER:::100", "RTRV-SW-VER", "100"},
-		{"RTRV-SYS:::101", "RTRV-SYS", "101"},
-		{"rtrv-eqpt::all:7", "RTRV-EQPT", "7"}, // case-insensitive verb
-		{"ACT-USER::admin:CTAG1::secret", "ACT-USER", "CTAG1"},
+		// Strict form (VERB::AID:CTAG) — CTAG is field 3.
+		{"RTRV-EQPT::ALL:100", "RTRV-EQPT", "", "100"},
+		{"RTRV-ALM-ALL::ALL:101", "RTRV-ALM-ALL", "", "101"},
+		{"RTRV-SW-VER:::100", "RTRV-SW-VER", "", "100"},
+		{"RTRV-SYS:::101", "RTRV-SYS", "", "101"},
+		{"rtrv-eqpt::all:7", "RTRV-EQPT", "", "7"}, // case-insensitive verb
+		{"ACT-USER::admin:CTAG1::secret", "ACT-USER", "", "CTAG1"},
+		// Short form (VERB:TID:CTAG) — CTAG is the last field; TID addresses an RNE.
+		{"RTRV-EQPT:RNE-LIMERICK:3", "RTRV-EQPT", "RNE-LIMERICK", "3"},
+		{"RTRV-ALM-ALL:RNE-LIMERICK:4", "RTRV-ALM-ALL", "RNE-LIMERICK", "4"},
+		{"RTRV-NBR:ALL:2", "RTRV-NBR", "ALL", "2"},
 	}
 	for _, c := range cases {
-		verb, ctag := parseTL1(c.raw)
-		if verb != c.wantVerb || ctag != c.wantCtag {
-			t.Errorf("parseTL1(%q) = (%q,%q), want (%q,%q)", c.raw, verb, ctag, c.wantVerb, c.wantCtag)
+		verb, tid, ctag := parseTL1(c.raw)
+		if verb != c.wantVerb || tid != c.wantTID || ctag != c.wantCtag {
+			t.Errorf("parseTL1(%q) = (%q,%q,%q), want (%q,%q,%q)",
+				c.raw, verb, tid, ctag, c.wantVerb, c.wantTID, c.wantCtag)
 		}
 	}
 }
@@ -141,6 +148,120 @@ func TestRequireSSHAuth(t *testing.T) {
 		if got := s.requireSSHAuth(c.dev); got != c.want {
 			t.Errorf("mode=%q driver=%q: requireSSHAuth=%v, want %v", c.mode, c.dev.Driver, got, c.want)
 		}
+	}
+}
+
+func TestTidIsLocal(t *testing.T) {
+	own := "CIENA-LAB-0001"
+	local := []string{"", "ALL", "all", "CIENA-LAB-0001", "ciena-lab-0001"}
+	rne := []string{"RNE-CORK", "RNE-LIMERICK", "SOMETHING"}
+	for _, tid := range local {
+		if !tidIsLocal(tid, own) {
+			t.Errorf("tidIsLocal(%q) = false, want true", tid)
+		}
+	}
+	for _, tid := range rne {
+		if tidIsLocal(tid, own) {
+			t.Errorf("tidIsLocal(%q) = true, want false", tid)
+		}
+	}
+}
+
+func TestIndexSections(t *testing.T) {
+	// No marker -> legacy single-NE: whole data is local, no RNEs.
+	plain := []byte("   \"SHELF-1::X\"\n   \"SLOT-1:Y\"\n")
+	local, rne, order := indexSections(plain)
+	if string(local) != string(plain) || len(rne) != 0 || len(order) != 0 {
+		t.Errorf("no-marker: local=%q rne=%v order=%v", local, rne, order)
+	}
+
+	// GNE + two RNEs.
+	data := []byte("GNE-A\nGNE-B\n;;RNE RNE-CORK\nCORK-1\n;;RNE RNE-GALWAY\nGAL-1\nGAL-2\n")
+	local, rne, order = indexSections(data)
+	if string(local) != "GNE-A\nGNE-B\n" {
+		t.Errorf("local section = %q", local)
+	}
+	if got := []string{"RNE-CORK", "RNE-GALWAY"}; order[0] != got[0] || order[1] != got[1] {
+		t.Errorf("order = %v, want %v", order, got)
+	}
+	if string(rne["RNE-CORK"]) != "CORK-1\n" {
+		t.Errorf("RNE-CORK = %q", rne["RNE-CORK"])
+	}
+	if string(rne["RNE-GALWAY"]) != "GAL-1\nGAL-2\n" {
+		t.Errorf("RNE-GALWAY = %q", rne["RNE-GALWAY"])
+	}
+	// Sections must be zero-copy sub-slices of the input (same backing array).
+	if &rne["RNE-CORK"][0] != &data[len("GNE-A\nGNE-B\n;;RNE RNE-CORK\n")] {
+		t.Error("RNE-CORK section is not a sub-slice of the input (copy detected)")
+	}
+}
+
+// gneSession builds a logged-in GNE session over a sectioned config blob.
+func gneSession(t *testing.T) (*sessionCtx, *tl1Session) {
+	t.Helper()
+	ctx := tl1Ctx("admin", "admin")
+	data := []byte("   \"SHELF-1::GNE\"\n;;RNE RNE-CORK\n   \"SHELF-1::CORK\"\n;;RNE RNE-GALWAY\n   \"SHELF-1::GAL\"\n")
+	ctx.dev.Data = data
+	s := newTL1Session(ctx)
+	s.localEQPT, s.rneEQPT, s.rneOrder = indexSections(data)
+	s.loggedIn = true
+	return ctx, s
+}
+
+func TestTL1GNERouting(t *testing.T) {
+	ctx, s := gneSession(t)
+
+	// Local RTRV-EQPT streams the GNE section; header SID is the GNE.
+	cmd, resp := ctx.dispatchTL1("RTRV-EQPT::ALL:100", s)
+	if cmd != CmdTL1RtrvEqpt || string(resp.ConfigOutput) != "   \"SHELF-1::GNE\"\n" {
+		t.Errorf("local EQPT: cmd=%v body=%q", cmd, resp.ConfigOutput)
+	}
+	if !strings.Contains(string(resp.Output), "CIENA-LAB-0001") {
+		t.Errorf("local EQPT header should carry GNE SID: %q", resp.Output)
+	}
+
+	// RTRV-EQPT to an RNE streams that RNE's section; header SID is the RNE TID.
+	cmd, resp = ctx.dispatchTL1("RTRV-EQPT:RNE-CORK:3", s)
+	if cmd != CmdTL1RtrvEqpt || string(resp.ConfigOutput) != "   \"SHELF-1::CORK\"\n" {
+		t.Errorf("RNE EQPT: cmd=%v body=%q", cmd, resp.ConfigOutput)
+	}
+	if !strings.Contains(string(resp.Output), "M  3 COMPLD") || !strings.Contains(string(resp.Output), "RNE-CORK") {
+		t.Errorf("RNE EQPT header should carry RNE TID + ctag: %q", resp.Output)
+	}
+
+	// Unknown TID -> DENY IIAC.
+	cmd, resp = ctx.dispatchTL1("RTRV-EQPT:RNE-NOPE:9", s)
+	if cmd != CmdTL1Deny || !strings.Contains(string(resp.Output), "IIAC") {
+		t.Errorf("unknown TID: cmd=%v out=%q, want DENY/IIAC", cmd, resp.Output)
+	}
+
+	// RNE-targeted alarm: header SID is the RNE.
+	cmd, resp = ctx.dispatchTL1("RTRV-ALM-ALL:RNE-GALWAY:4", s)
+	if cmd != CmdTL1RtrvAlmAll || !strings.Contains(string(resp.Output), "RNE-GALWAY") {
+		t.Errorf("RNE alarm: cmd=%v out=%q", cmd, resp.Output)
+	}
+}
+
+func TestTL1RtrvNbr(t *testing.T) {
+	ctx, s := gneSession(t)
+	cmd, resp := ctx.dispatchTL1("RTRV-NBR:ALL:2", s)
+	if cmd != CmdTL1RtrvNbr {
+		t.Fatalf("RTRV-NBR: cmd=%v, want CmdTL1RtrvNbr", cmd)
+	}
+	out := string(resp.Output)
+	for _, tid := range []string{"RNE-CORK", "RNE-GALWAY"} {
+		if !strings.Contains(out, tid) {
+			t.Errorf("RTRV-NBR list missing %q: %q", tid, out)
+		}
+	}
+
+	// A standalone (no-RNE) session answers RTRV-NBR with an empty COMPLD.
+	ctxS := tl1Ctx("admin", "admin")
+	sStandalone := newTL1Session(ctxS)
+	sStandalone.loggedIn = true
+	cmd, resp = ctxS.dispatchTL1("RTRV-NBR:ALL:2", sStandalone)
+	if cmd != CmdTL1RtrvNbr || !strings.Contains(string(resp.Output), "M  2 COMPLD") {
+		t.Errorf("standalone RTRV-NBR: cmd=%v out=%q", cmd, resp.Output)
 	}
 }
 

@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.4] — 2026-06-07
+
+### Added
+
+- **Ciena GNE/RNE topology** — new model `ciena-6500-tl1-gne`: a 6500 acting as a Gateway NE
+  (GNE) that fronts 2–5 Remote NEs (RNEs) reachable only through it. The generator writes each
+  RNE's shelf inventory into the device's config (delimited sections); the `ciena_tl1` driver
+  indexes them at session start and routes `RTRV-*` commands to an RNE by its TID
+  (`RTRV-EQPT:RNE-LIMERICK:3;`), streaming that RNE's inventory zero-copy with the RNE's TID as
+  the response SID. New verb **`RTRV-NBR`** lists the RNEs behind a GNE. Unknown/unreachable TID
+  returns TL1 `DENY`/`IIAC`. The existing `ciena-6500-tl1` model is unchanged (standalone node,
+  byte-identical output); the TL1 command parser now also accepts the short `VERB:TID:CTAG` form.
+
 ## [0.0.3] — 2026-06-06
 
 ### Changed
@@ -119,7 +132,8 @@ Initial public release. High-density Cisco IOS SSH simulator for load testing [r
 
 See [README § Known limitations](README.md#known-limitations) for the full list.
 
-[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.4
 [0.0.3]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.3
 [0.0.2]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.2
 [0.0.1]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.1

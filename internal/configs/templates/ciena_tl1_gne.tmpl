@@ -1,0 +1,8 @@
+{{- /* Gateway NE inventory followed by one ";;RNE <TID>" section per remote NE.
+       The ciena_tl1 driver splits on the ";;RNE " marker lines (column 0) at
+       session start and streams the GNE's own or a targeted RNE's section. */ -}}
+{{- template "ciena_eqpt_body" . -}}
+{{- range .RNEs -}}
+;;RNE {{ .SID }}
+{{ template "ciena_eqpt_body" . -}}
+{{- end -}}

@@ -53,9 +53,46 @@ func pad(i int) string {
 	return string(s)
 }
 
+// TestCienaGNEDeterministic: a GNE config (GNE shelf + RNE sections) is
+// byte-reproducible across runs with the same seed.
+func TestCienaGNEDeterministic(t *testing.T) {
+	mk := func() string {
+		cfg := baseTestConfig(t, 12)
+		cfg.IPCount = 1
+		cfg.DevicesPerIP = 12
+		cfg.Distribution = "ciena-6500-tl1-gne:100"
+		if _, err := Run(cfg, io.Discard); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return cfg.OutputDir
+	}
+	dirA, dirB := mk(), mk()
+	for i := 0; i < 12; i++ {
+		fa := filepath.Join(dirA, "device-"+pad(i)+".cfg")
+		fb := filepath.Join(dirB, "device-"+pad(i)+".cfg")
+		a, err := os.ReadFile(fa)
+		if err != nil {
+			t.Fatalf("read %s: %v", fa, err)
+		}
+		b, err := os.ReadFile(fb)
+		if err != nil {
+			t.Fatalf("read %s: %v", fb, err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Fatalf("GNE device %d not deterministic across runs", i)
+		}
+		if !bytes.Contains(a, []byte("\n;;RNE ")) {
+			t.Errorf("GNE device %d has no RNE section: %q", i, a)
+		}
+	}
+}
+
 func TestParseDistributionCiena(t *testing.T) {
 	if _, err := parseDistribution("ciena-6500-tl1:100"); err != nil {
 		t.Errorf("ciena-only distribution should parse: %v", err)
+	}
+	if _, err := parseDistribution("ciena-6500-tl1-gne:100"); err != nil {
+		t.Errorf("ciena GNE distribution should parse: %v", err)
 	}
 	if _, err := parseDistribution("sm:50,ciena-6500-tl1:50"); err != nil {
 		t.Errorf("mixed Cisco/Ciena distribution should parse: %v", err)

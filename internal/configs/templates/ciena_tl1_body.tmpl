@@ -1,0 +1,19 @@
+{{- /* Shared Ciena 6500 RTRV-EQPT inventory body. Rendered for the local shelf
+       (standalone node or GNE) and for each RNE behind a GNE. Kept in one place
+       so the standalone and GNE templates can never drift. */ -}}
+{{- define "ciena_eqpt_body" -}}
+   "SHELF-1::PROVISIONED,TYPE=6500-7SLOT,SN={{ .ShelfSerial }},SWVER={{ .SwVersion }},IP={{ .NodeIP }}:IS-NR"
+{{ range .Slots -}}
+{{ if .Equipped -}}
+{{ $slot := .Slot -}}
+   "SLOT-{{ .Slot }}:{{ .CardType }},CLEI={{ .CLEI }},SN={{ .Serial }},PN={{ .PartNum }}:{{ .State }}"
+{{ range .Ports -}}
+{{ if .Equipped -}}
+   "SLOT-{{ $slot }}-{{ .Port }}::OPTIC={{ .OpticType }},WL={{ .Wavelength }},SN={{ .Serial }}:{{ .State }}"
+{{ end -}}
+{{ end -}}
+{{ else -}}
+   "SLOT-{{ .Slot }}::UNEQUIPPED:OOS-AUMA"
+{{ end -}}
+{{ end -}}
+{{- end -}}

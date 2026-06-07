@@ -11,6 +11,11 @@ import (
 // so future 6500 form factors (ciena-6500-2slot, …) slot in alongside it.
 const cienaModelName = "ciena-6500-tl1"
 
+// cienaGNEModelName is a Ciena 6500 acting as a Gateway NE (GNE) that fronts
+// several Remote NEs (RNEs). The generated config carries the GNE's own shelf
+// inventory plus each RNE's, which the ciena_tl1 driver routes to by TID.
+const cienaGNEModelName = "ciena-6500-tl1-gne"
+
 // modelHostname extracts the manifest hostname from a model's rendered data.
 // Each vendor's data struct names this field differently (Cisco Hostname,
 // Ciena SID); the manifest hostname becomes the device's runtime SID/TID.
@@ -20,6 +25,8 @@ func modelHostname(data any) string {
 		return d.Hostname
 	case CienaEqptData:
 		return d.SID
+	case CienaGNEData:
+		return d.SID // the GNE is the SSH-addressable node; RNEs are not manifest rows
 	default:
 		return ""
 	}
@@ -37,6 +44,54 @@ func cienaModel() model {
 		tmplFile: "ciena_tl1_eqpt.tmpl",
 		build:    func(cfg Config, index int, m model) any { return buildCienaEqpt(cfg, index) },
 	}
+}
+
+// cienaGNEModel returns the registry entry for a Ciena 6500 GNE. Same runtime
+// driver (ciena_tl1) as the standalone model; the GNE template additionally
+// emits per-RNE inventory sections that the driver routes to by TID.
+func cienaGNEModel() model {
+	return model{
+		name:     cienaGNEModelName,
+		vendor:   "Ciena",
+		template: "ciena_tl1",
+		tmplFile: "ciena_tl1_gne.tmpl",
+		build:    func(cfg Config, index int, m model) any { return buildCienaGNE(cfg, index) },
+	}
+}
+
+// CienaGNEData is the payload for templates/ciena_tl1_gne.tmpl: the GNE's own
+// shelf (the embedded CienaEqptData) plus the shelves of the RNEs reachable
+// through it (each a CienaEqptData whose SID is the RNE's TID). Deterministic
+// via the same deviceRand stream as the standalone builder.
+type CienaGNEData struct {
+	CienaEqptData
+	RNEs []CienaEqptData
+}
+
+// buildCienaGNE builds a GNE with 2–5 RNEs behind it. The GNE shelf is the same
+// shape as a standalone node; each RNE is a full shelf re-identified with an
+// RNE-<CITY> TID. All randomness flows from deviceRand(seed, index) so output is
+// byte-reproducible.
+func buildCienaGNE(cfg Config, index int) CienaGNEData {
+	rng := deviceRand(cfg.Seed, index)
+	gne := buildCienaShelf(cfg, index, rng)
+
+	nRNE := 2 + rng.Intn(4) // 2..5
+	used := map[string]bool{}
+	var rnes []CienaEqptData
+	for i := 0; i < nRNE; i++ {
+		tid := "RNE-" + strings.ToUpper(citySyllables[rng.Intn(len(citySyllables))])
+		if used[tid] {
+			continue // dedupe RNE TID collisions within one GNE
+		}
+		used[tid] = true
+		r := buildCienaShelf(cfg, index, rng)
+		r.SID = tid
+		r.ShelfSerial = serialFor(tid)
+		r.NodeIP = ipPlusOffset(cfg.IPBase, index/cfg.DevicesPerIP)
+		rnes = append(rnes, r)
+	}
+	return CienaGNEData{CienaEqptData: gne, RNEs: rnes}
 }
 
 // CienaEqptData is the payload for templates/ciena_tl1_eqpt.tmpl: the equipment
@@ -78,8 +133,15 @@ var (
 	cienaOptics = []string{"SFP+", "QSFP28", "CFP2"}
 )
 
+// buildCienaEqpt builds one standalone shelf with its own deterministic rng.
 func buildCienaEqpt(cfg Config, index int) CienaEqptData {
-	rng := deviceRand(cfg.Seed, index)
+	return buildCienaShelf(cfg, index, deviceRand(cfg.Seed, index))
+}
+
+// buildCienaShelf builds one 6500 shelf, drawing from the supplied rng. Taking
+// the rng as a parameter lets a GNE build its own shelf plus several RNE shelves
+// off a single deterministic stream.
+func buildCienaShelf(cfg Config, index int, rng *rand.Rand) CienaEqptData {
 	city := citySyllables[rng.Intn(len(citySyllables))]
 	sid := fmt.Sprintf("CIENA-%s-%04d", strings.ToUpper(city), 1000+(index%9000))
 

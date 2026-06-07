@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -23,11 +24,16 @@ import (
 // cienaServer generates a single Ciena 6500 device and serves it on loopback
 // with the default (password) SSH auth mode.
 func cienaServer(t *testing.T) (port int, hostname string, srv *sshsrv.Server) {
-	return cienaServerMode(t, "")
+	return cienaModelServer(t, "", "ciena-6500-tl1")
 }
 
 // cienaServerMode is cienaServer with an explicit --ssh-auth mode.
 func cienaServerMode(t *testing.T, authMode string) (port int, hostname string, srv *sshsrv.Server) {
+	return cienaModelServer(t, authMode, "ciena-6500-tl1")
+}
+
+// cienaModelServer generates one device of the given model and serves it.
+func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname string, srv *sshsrv.Server) {
 	t.Helper()
 	tmp := t.TempDir()
 	manifest := filepath.Join(tmp, "manifest.csv")
@@ -37,7 +43,7 @@ func cienaServerMode(t *testing.T, authMode string) (port int, hostname string, 
 	if _, err := configs.Run(configs.Config{
 		Count: 1, OutputDir: configsDir, ManifestPath: manifest,
 		IPBase: "127.0.0.1", IPCount: 1, PortStart: sshPort, DevicesPerIP: 1,
-		Seed: 7, Distribution: "ciena-6500-tl1:100",
+		Seed: 7, Distribution: model + ":100",
 		Username: "admin", Password: "admin", EnablePassword: "enable123",
 	}, io.Discard); err != nil {
 		t.Fatalf("generator: %v", err)
@@ -139,6 +145,67 @@ func TestCiena_DriverModeNoAuth(t *testing.T) {
 	ec.reset()
 	ec.send("ACT-USER::admin:1::admin;")
 	ec.expect("M  1 COMPLD", 3*time.Second)
+}
+
+// TestCiena_GNE_RNERouting drives the full GNE/RNE example session over the wire:
+// log in to the GNE, list RNEs via RTRV-NBR, address an RNE by TID (EQPT streamed
+// with the RNE's SID in the header), confirm GNE-local commands still work, and
+// that an unknown TID is denied with IIAC.
+func TestCiena_GNE_RNERouting(t *testing.T) {
+	port, gneSID, srv := cienaModelServer(t, "none", "ciena-6500-tl1-gne")
+	ec := dialExpectNoAuth(t, port)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+	ec.reset()
+	ec.send("ACT-USER::admin:1::admin;")
+	ec.expect("M  1 COMPLD", 3*time.Second)
+
+	// RTRV-NBR lists the RNEs behind this GNE; pull one TID out of the response.
+	ec.reset()
+	ec.send("RTRV-NBR:ALL:2;")
+	nbr := ec.expect("M  2 COMPLD", 3*time.Second)
+	m := regexp.MustCompile(`"(RNE-[A-Z0-9]+):`).FindStringSubmatch(nbr)
+	if m == nil {
+		t.Fatalf("RTRV-NBR returned no RNE TID: %q", nbr)
+	}
+	rne := m[1]
+
+	// RTRV-EQPT to that RNE: COMPLD, header SID is the RNE TID (3-space SID line,
+	// distinct from the command echo), inventory streamed.
+	ec.reset()
+	ec.send(fmt.Sprintf("RTRV-EQPT:%s:3;", rne))
+	eqpt := ec.expect("M  3 COMPLD", 3*time.Second)
+	if !strings.Contains(eqpt, "   "+rne+" ") {
+		t.Errorf("RNE EQPT header should carry RNE TID %q as SID: %q", rne, eqpt)
+	}
+	ec.expect("TYPE=6500-7SLOT", 3*time.Second)
+
+	// GNE-local EQPT still works; header SID is the GNE.
+	ec.reset()
+	ec.send("RTRV-EQPT::ALL:100;")
+	local := ec.expect("M  100 COMPLD", 3*time.Second)
+	if !strings.Contains(local, "   "+gneSID+" ") {
+		t.Errorf("local EQPT header should carry GNE SID %q: %q", gneSID, local)
+	}
+
+	// RNE-targeted alarm completes.
+	ec.reset()
+	ec.send(fmt.Sprintf("RTRV-ALM-ALL:%s:4;", rne))
+	ec.expect("M  4 COMPLD", 3*time.Second)
+
+	// Unknown / unreachable TID -> DENY IIAC.
+	ec.reset()
+	ec.send("RTRV-EQPT:RNE-NOPE:9;")
+	deny := ec.expect("M  9 DENY", 3*time.Second)
+	if !strings.Contains(deny, "IIAC") {
+		t.Errorf("unknown TID should DENY/IIAC: %q", deny)
+	}
+
+	if n := histogramLabelSampleCount(t, srv.Metrics().Gatherer(),
+		"rcfgsim_command_duration_seconds", "command", "CmdTL1RtrvNbr"); n < 1 {
+		t.Errorf("rcfgsim_command_duration_seconds{command=CmdTL1RtrvNbr}: want >=1 sample, got %d", n)
+	}
 }
 
 // TestDriverMode_CiscoRejectsNoAuth is the negative of TestCiena_DriverModeNoAuth:
