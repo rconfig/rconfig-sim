@@ -1,6 +1,8 @@
 package configs
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -72,6 +74,18 @@ type CienaGNEData struct {
 // shape as a standalone node; each RNE is a full shelf re-identified with an
 // RNE-<CITY> TID. All randomness flows from deviceRand(seed, index) so output is
 // byte-reproducible.
+//
+// With cfg.RNEDualHomePct > 0 some RNEs are drawn from a fleet-wide shared pool
+// instead of being private to this GNE, so the same RNE turns up behind several
+// gateways. A shared RNE's shelf is derived from its TID rather than from this
+// GNE's stream, which is what makes two gateways emit byte-identical sections for
+// it without the generator workers having to coordinate. At the default of 0 no
+// draw is taken at all, so output stays byte-identical to a build without this.
+//
+// Dual-homing also links each gateway to its neighbours by a guaranteed shared
+// element (see linkRnes), so any two adjacent devices in the fleet always have a
+// dual-homed RNE between them rather than only when the random draw happens to
+// collide.
 func buildCienaGNE(cfg Config, index int) CienaGNEData {
 	rng := deviceRand(cfg.Seed, index)
 	gne := buildCienaShelf(cfg, index, rng)
@@ -79,12 +93,36 @@ func buildCienaGNE(cfg Config, index int) CienaGNEData {
 	nRNE := 2 + rng.Intn(4) // 2..5
 	used := map[string]bool{}
 	var rnes []CienaEqptData
-	for i := 0; i < nRNE; i++ {
-		tid := "RNE-" + strings.ToUpper(citySyllables[rng.Intn(len(citySyllables))])
+
+	// Links to the neighbouring gateways come first and count towards this GNE's
+	// total, so enabling dual-homing re-mixes which elements sit behind a gateway
+	// rather than growing every gateway past the documented 2-5.
+	for _, tid := range linkRnes(cfg, index) {
+		used[tid] = true
+		rnes = append(rnes, buildSharedRneShelf(cfg, tid))
+	}
+
+	for i := len(rnes); i < nRNE; i++ {
+		city := strings.ToUpper(citySyllables[rng.Intn(len(citySyllables))])
+
+		shared := false
+		if cfg.RNEDualHomePct > 0 {
+			shared = rng.Intn(100) < cfg.RNEDualHomePct
+		}
+
+		tid := rneTID(cfg, city, index, shared)
 		if used[tid] {
 			continue // dedupe RNE TID collisions within one GNE
 		}
 		used[tid] = true
+
+		if shared {
+			// Identical through every gateway that fronts it, so rConfig sees one device.
+			rnes = append(rnes, buildSharedRneShelf(cfg, tid))
+
+			continue
+		}
+
 		r := buildCienaShelf(cfg, index, rng)
 		r.SID = tid
 		r.ShelfSerial = serialFor(tid)
@@ -92,6 +130,79 @@ func buildCienaGNE(cfg Config, index int) CienaGNEData {
 		rnes = append(rnes, r)
 	}
 	return CienaGNEData{CienaEqptData: gne, RNEs: rnes}
+}
+
+// rneTID names a remote NE.
+//
+// A shared RNE keeps the bare "RNE-<CITY>" form so two gateways drawing the same
+// city name the same element. A private one carries its gateway's index, which
+// stops two gateways colliding on a city by chance and presenting unrelated
+// equipment under one name. Without dual-homing enabled the historic bare form is
+// kept for every RNE so existing fleets regenerate unchanged.
+//
+// The suffix stays alphanumeric: TIDs are matched as RNE-[A-Z0-9]+ on the wire.
+func rneTID(cfg Config, city string, index int, shared bool) string {
+	if shared || cfg.RNEDualHomePct == 0 {
+		return "RNE-" + city
+	}
+
+	return fmt.Sprintf("RNE-%s%04d", city, index%10000)
+}
+
+// linkRnes returns the TIDs of the elements this gateway shares with its immediate
+// neighbours in the fleet.
+//
+// Optical networks are built as chains and rings: an RNE sits between two gateways
+// and is reachable through either, which is what makes losing one survivable. The
+// link between gateway N-1 and N is named for that pair, so both devices derive the
+// same TID independently — device N claims the link to N-1 and the link to N+1, and
+// its neighbours claim the same two from their side. No coordination between
+// generator workers, and every adjacent pair is guaranteed to share an element
+// rather than only doing so when a random draw collides.
+//
+// Empty unless dual-homing is enabled, so default output is untouched.
+func linkRnes(cfg Config, index int) []string {
+	if cfg.RNEDualHomePct <= 0 {
+		return nil
+	}
+
+	var tids []string
+	if index > 0 {
+		tids = append(tids, linkTID(index-1))
+	}
+	// The last gateway in the fleet has no successor, so it claims no forward link -
+	// an element with only one gateway would not be dual-homed at all.
+	if index+1 < cfg.Count {
+		tids = append(tids, linkTID(index))
+	}
+
+	return tids
+}
+
+// linkTID names the element shared between gateway n and gateway n+1.
+func linkTID(n int) string {
+	return fmt.Sprintf("RNE-LINK%04d", n%10000)
+}
+
+// buildSharedRneShelf builds a remote NE entirely from its TID, so every gateway
+// that fronts it renders the same bytes. Nothing about the GNE leaks in: the
+// shelf contents, serial and management IP are all TID-derived.
+func buildSharedRneShelf(cfg Config, tid string) CienaEqptData {
+	seedIndex := tidSeedIndex(tid)
+
+	r := buildCienaShelf(cfg, seedIndex, deviceRand(cfg.Seed, seedIndex))
+	r.SID = tid
+	r.ShelfSerial = serialFor(tid)
+	r.NodeIP = ipPlusOffset(cfg.IPBase, seedIndex%256)
+
+	return r
+}
+
+// tidSeedIndex turns a TID into the stable index its shelf is generated from.
+func tidSeedIndex(tid string) int {
+	sum := sha256.Sum256([]byte(tid))
+
+	return int(binary.BigEndian.Uint32(sum[:4]) & 0x7fffffff)
 }
 
 // CienaEqptData is the payload for templates/ciena_tl1_eqpt.tmpl: the equipment
