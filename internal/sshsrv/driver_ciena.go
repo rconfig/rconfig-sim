@@ -257,24 +257,51 @@ func parseTL1(raw string) (verb, tid, ctag string) {
 //
 //	ACT-USER::<username>:<ctag>::<password>
 //
-// username is field[2], password is field[5].
+// username is field[2], password is field[5]. Both forms of the password are
+// accepted — bare, and the TL1 (GR-831) quoted form "<password>" a real 6500
+// requires once the password contains anything beyond plain alphanumerics.
+// Being liberal here keeps older rConfig builds, which send the password bare,
+// working against a newer simulator.
+//
+// The password is the last ACT-USER parameter, so fields 5..n are re-joined
+// before unquoting: that way a password containing ":" — the TL1 field
+// separator, and the whole reason the quotes exist — survives intact instead of
+// being truncated at the colon.
 func parseActUser(raw string) (user, pass string) {
 	fields := strings.Split(strings.TrimSpace(raw), ":")
 	if len(fields) > 2 {
-		user = strings.TrimSpace(fields[2])
+		user = unquoteTL1(fields[2])
 	}
 	if len(fields) > 5 {
-		pass = strings.TrimSpace(fields[5])
+		pass = unquoteTL1(strings.Join(fields[5:], ":"))
 	}
 	return user, pass
+}
+
+// unquoteTL1 trims surrounding whitespace and then strips one matching pair of
+// enclosing double quotes, leaving anything unquoted untouched. Only the
+// outermost pair is removed — trimming every quote character would corrupt a
+// password that itself contains one — and unwrapping after the whitespace trim
+// keeps significant leading/trailing spaces that the quotes were protecting.
+func unquoteTL1(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // readTL1 reads one ";"-terminated TL1 command from the channel. Like the Cisco
 // readLine it echoes printable input and handles backspace / Ctrl-C / Ctrl-D,
 // but it terminates on ";" rather than newline and tolerates commands spanning
 // multiple physical lines (CR/LF between tokens are echoed but not buffered).
+//
+// The terminator search is quote-aware: inside a TL1 quoted string a ";" is
+// ordinary data, so a password such as "pa;ss" is read whole rather than cut
+// short at the semicolon.
 func readTL1(ch io.ReadWriter) (string, error) {
 	var buf []byte
+	var inQuote bool
 	one := make([]byte, 1)
 	for {
 		n, err := ch.Read(one)
@@ -288,10 +315,18 @@ func readTL1(ch io.ReadWriter) (string, error) {
 		switch c {
 		case 0x7f, 0x08:
 			if len(buf) > 0 {
+				if buf[len(buf)-1] == '"' {
+					inQuote = !inQuote
+				}
 				buf = buf[:len(buf)-1]
 				_, _ = ch.Write([]byte("\b \b"))
 			}
 		case ';':
+			if inQuote {
+				buf = append(buf, c)
+				_, _ = ch.Write([]byte{c})
+				continue
+			}
 			_, _ = ch.Write([]byte(";\r\n"))
 			return string(buf), nil
 		case '\r', '\n':
@@ -307,6 +342,9 @@ func readTL1(ch io.ReadWriter) (string, error) {
 			}
 		default:
 			if c >= 0x20 && c < 0x7f {
+				if c == '"' {
+					inQuote = !inQuote
+				}
 				buf = append(buf, c)
 				_, _ = ch.Write([]byte{c})
 			}

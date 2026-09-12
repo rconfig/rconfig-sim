@@ -32,8 +32,16 @@ func cienaServerMode(t *testing.T, authMode string) (port int, hostname string, 
 	return cienaModelServer(t, authMode, "ciena-6500-tl1")
 }
 
-// cienaModelServer generates one device of the given model and serves it.
+// cienaModelServer generates one device of the given model and serves it with
+// the standard test password.
 func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname string, srv *sshsrv.Server) {
+	t.Helper()
+	return cienaModelServerAuth(t, authMode, model, "admin")
+}
+
+// cienaModelServerAuth is cienaModelServer with an explicit accepted password,
+// so a complex one can be driven end to end over the wire.
+func cienaModelServerAuth(t *testing.T, authMode, model, password string) (port int, hostname string, srv *sshsrv.Server) {
 	t.Helper()
 	tmp := t.TempDir()
 	manifest := filepath.Join(tmp, "manifest.csv")
@@ -44,7 +52,7 @@ func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname 
 		Count: 1, OutputDir: configsDir, ManifestPath: manifest,
 		IPBase: "127.0.0.1", IPCount: 1, PortStart: sshPort, DevicesPerIP: 1,
 		Seed: 7, Distribution: model + ":100",
-		Username: "admin", Password: "admin", EnablePassword: "enable123",
+		Username: "admin", Password: password, EnablePassword: "enable123",
 	}, io.Discard); err != nil {
 		t.Fatalf("generator: %v", err)
 	}
@@ -54,7 +62,7 @@ func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname 
 	srv, err = sshsrv.New(sshsrv.Config{
 		ListenIP: "127.0.0.1", PortStart: sshPort, PortCount: 1,
 		ManifestPath: manifest, HostKeyPath: filepath.Join(tmp, "host"),
-		Username: "admin", Password: "admin", EnablePassword: "enable123",
+		Username: "admin", Password: password, EnablePassword: "enable123",
 		SSHAuthMode:        authMode,
 		ResponseDelayMinMS: 0, ResponseDelayMaxMS: 0,
 		MaxConcurrentSessions: 4,
@@ -99,6 +107,51 @@ func TestCiena_LoginAndRtrvEqpt(t *testing.T) {
 	if n := histogramLabelSampleCount(t, srv.Metrics().Gatherer(),
 		"rcfgsim_command_duration_seconds", "command", "CmdTL1RtrvEqpt"); n < 1 {
 		t.Errorf("rcfgsim_command_duration_seconds{command=CmdTL1RtrvEqpt}: want >=1 sample, got %d", n)
+	}
+}
+
+// A real 6500 rejects a complex password unless it is wrapped in double quotes,
+// which is the form rConfig now always sends. Drive the quoted ACT-USER over a
+// real SSH channel and confirm the simulator authenticates it — this is the
+// contract the rconfig8 TL1 integration suite depends on.
+func TestCiena_QuotedPasswordLogin(t *testing.T) {
+	// Contains ":" — the TL1 field separator — and ";", the wire terminator.
+	const complexPassword = `Tr@ns!p:rt;#2026`
+
+	port, sid, _ := cienaModelServerAuth(t, "", "ciena-6500-tl1", complexPassword)
+	ec := dialExpect(t, port, "admin", complexPassword)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+
+	ec.reset()
+	ec.send(`ACT-USER::admin:100::"` + complexPassword + `";`)
+	login := ec.expect("M  100 COMPLD", 3*time.Second)
+	if !strings.Contains(login, sid) {
+		t.Errorf("quoted-password login COMPLD should carry SID %q: %q", sid, login)
+	}
+
+	// The session really is logged in: a post-login verb must not DENY.
+	ec.reset()
+	ec.send("RTRV-EQPT::ALL:101;")
+	ec.expect("M  101 COMPLD", 3*time.Second)
+}
+
+// A wrong password sent in the quoted form must still be denied — the quotes are
+// framing, not an authentication bypass.
+func TestCiena_QuotedPasswordWrongIsDenied(t *testing.T) {
+	const complexPassword = `Tr@ns!p:rt;#2026`
+
+	port, _, _ := cienaModelServerAuth(t, "none", "ciena-6500-tl1", complexPassword)
+	ec := dialExpectNoAuth(t, port)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+	ec.reset()
+	ec.send(`ACT-USER::admin:100::"WRONG:pass";`)
+	got := ec.expect("M  100 DENY", 3*time.Second)
+	if !strings.Contains(got, "PLNA") {
+		t.Errorf("wrong quoted password should DENY with PLNA: %q", got)
 	}
 }
 
