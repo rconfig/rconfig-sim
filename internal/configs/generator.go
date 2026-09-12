@@ -251,6 +251,13 @@ type Config struct {
 	Username       string
 	Password       string
 	EnablePassword string
+
+	// RNEDualHomePct is the percentage of a GNE's remote NEs that are drawn from a
+	// fleet-wide shared pool rather than being private to that GNE, so the same RNE
+	// appears behind more than one gateway — the dual-homed topology real optical
+	// networks use for resilience. 0 (the default) keeps every GNE's RNEs private and
+	// leaves generated output byte-identical to a build without this option.
+	RNEDualHomePct int
 }
 
 // Summary is the generator's final report.
