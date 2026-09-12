@@ -18,7 +18,7 @@ func main() {
 	flag.IntVar(&cfg.PortStart, "port-start", 10000, "first port in range")
 	flag.IntVar(&cfg.DevicesPerIP, "devices-per-ip", 2500, "devices mapped to each IP")
 	flag.Int64Var(&cfg.Seed, "seed", 42, "PRNG seed for deterministic output")
-	flag.StringVar(&cfg.Distribution, "distribution", "sm:40,md:40,lg:15,xl:5", "model weights (percent, sum=100; models: sm, md, lg, xl, 2xl, 3xl, 4xl, 5xl, 6xl, ciena-6500-tl1, ciena-6500-tl1-gne)")
+	flag.StringVar(&cfg.Distribution, "distribution", "sm:40,md:40,lg:15,xl:5", "model weights (percent, sum=100; models: sm, md, lg, xl, 2xl, 3xl, 4xl, 5xl, 6xl, ciena-6500-tl1, ciena-6500-tl1-gne, infinera-dtnx-tl1, cisco-ons15454-tl1)")
 	flag.IntVar(&cfg.RNEDualHomePct, "rne-dual-home-pct", 0, "percent of GNE remote NEs drawn from a shared pool, so the same RNE is reachable through more than one gateway (0 = none)")
 	flag.StringVar(&cfg.Username, "username", "admin", "username written into manifest")
 	flag.StringVar(&cfg.Password, "password", "admin", "password written into manifest")

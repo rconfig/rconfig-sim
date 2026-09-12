@@ -28,7 +28,7 @@ func TestParseTL1(t *testing.T) {
 		// Short form (VERB:TID:CTAG) — CTAG is the last field; TID addresses an RNE.
 		{"RTRV-EQPT:RNE-LIMERICK:3", "RTRV-EQPT", "RNE-LIMERICK", "3"},
 		{"RTRV-ALM-ALL:RNE-LIMERICK:4", "RTRV-ALM-ALL", "RNE-LIMERICK", "4"},
-		{"RTRV-NBR:ALL:2", "RTRV-NBR", "ALL", "2"},
+		{"RTRV-NE-LIST:ALL:2", "RTRV-NE-LIST", "ALL", "2"},
 	}
 	for _, c := range cases {
 		verb, tid, ctag := parseTL1(c.raw)

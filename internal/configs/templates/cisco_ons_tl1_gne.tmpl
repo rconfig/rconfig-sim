@@ -1,0 +1,8 @@
+{{- /* ONS 15454 gateway inventory followed by one ";;ENE <TID>" section per end NE.
+       Cisco calls the nodes behind a gateway ENEs (End NEs), not RNEs. The
+       cisco_ons_tl1 driver splits on the ";;ENE " marker lines at session start. */ -}}
+{{- template "optical_node_body" . -}}
+{{- range .ENEs -}}
+;;ENE {{ .SID }}
+{{ template "optical_node_body" . -}}
+{{- end -}}

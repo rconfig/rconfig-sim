@@ -1,8 +1,10 @@
 package sshsrv
 
 import (
+	"sort"
 	"time"
 
+	"github.com/rcfg-sim/rcfg-sim/internal/configs"
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 )
 
@@ -52,6 +54,33 @@ func driverFor(template string) Driver {
 		return d
 	}
 	return driverRegistry["cisco_ios"]
+}
+
+// unknownDrivers returns the distinct non-empty driver ids in devs that no driver is
+// registered for.
+//
+// driverFor falls back to cisco_ios so the session path can never nil-panic, but that made a
+// typo'd id silently serve the wrong vendor - an Infinera device answering as a Cisco switch,
+// with nothing in the logs to say so. Checking at startup turns that into a refusal to boot,
+// which is the only point at which it is cheap to notice.
+func unknownDrivers(devs []*configs.Device) []string {
+	seen := map[string]bool{}
+	var bad []string
+
+	for _, dev := range devs {
+		if dev.Driver == "" || seen[dev.Driver] {
+			continue
+		}
+		seen[dev.Driver] = true
+
+		if _, ok := driverRegistry[dev.Driver]; !ok {
+			bad = append(bad, dev.Driver)
+		}
+	}
+
+	sort.Strings(bad)
+
+	return bad
 }
 
 // registeredCommands returns the sorted-by-insertion union of every registered

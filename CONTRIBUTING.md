@@ -16,7 +16,7 @@ Thanks for considering a contribution. `rcfg-sim` is a focused tool — a load-t
 **Out of scope:**
 
 - Full Cisco IOS emulation (config mode, routing protocols, etc.) — see [README § Known limitations](README.md#known-limitations)
-- Multi-vendor emulation (JunOS, EOS, NX-OS) — fork the project if you need this
+- Emulating a vendor nobody is testing against. New vendors are welcome (the driver framework exists for exactly that, and Ciena, Infinera and Cisco ONS TL1 all use it), but a driver written from guesswork rather than from a real session capture is worse than none: it looks tested and is not
 - Features aimed at production use rather than load testing
 - Changes that couple `rcfg-sim` to a specific rConfig version
 
