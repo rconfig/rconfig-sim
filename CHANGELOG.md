@@ -6,6 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Dual-homed RNEs (`--rne-dual-home-pct`)** — that percentage of each GNE's remote NEs is
+  drawn from a fleet-wide shared pool instead of a private one, so the same RNE is reachable
+  through several gateways, as operators deploy them for resilience. A shared RNE's shelf is
+  derived from its TID, so every gateway fronting it renders byte-identical equipment and a
+  client can recognise the paths as one device; a private RNE now carries its gateway's index
+  (`RNE-LAX0007`) so two gateways cannot collide on a city name and serve unrelated equipment
+  under one TID. Gateways are additionally chained — device N always shares an `RNE-LINK<N>`
+  element with device N+1, as optical networks dual-home an RNE between neighbouring gateways —
+  so any two adjacent ports demonstrate dual-homing on every seed instead of only when a random
+  draw collides. Links count towards a gateway's documented 2–5 remote NEs. Defaults to 0, which
+  takes no extra draw from the generator stream and leaves output byte-identical to a build
+  without the option.
+
+### Fixed
+
+- **TL1 `ACT-USER` now accepts a quoted password** — a real 6500 requires a complex password to be
+  wrapped in double quotes, which rConfig now always sends; the parser compared the literal `"pw"`
+  against the configured password and denied every login, and truncated a password containing `:`.
+  The bare form is still accepted, and `;` inside a quoted string no longer terminates the command.
+
 ## [0.0.4] — 2026-06-07
 
 ### Added

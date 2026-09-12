@@ -1237,7 +1237,7 @@ The generator is driven by a **model registry**, of which the nine Cisco size bu
 | Model | Vendor | Driver | Protocol | Payload |
 |---|---|---|---|---|
 | `ciena-6500-tl1` | Ciena | `ciena_tl1` | TL1 over SSH | `RTRV-EQPT::ALL` shelf inventory (7-slot 6500), mmap-streamed |
-| `ciena-6500-tl1-gne` | Ciena | `ciena_tl1` | TL1 over SSH | Gateway NE fronting 2–5 Remote NEs; GNE + per-RNE inventories, mmap-streamed |
+| `ciena-6500-tl1-gne` | Ciena | `ciena_tl1` | TL1 over SSH | Gateway NE fronting 2–5 Remote NEs; GNE + per-RNE inventories, mmap-streamed. `--rne-dual-home-pct` shares RNEs between gateways |
 
 Mix them into any run, e.g. `--distribution "sm:50,ciena-6500-tl1:50"`. Ciena rows in the manifest carry `vendor=Ciena, template=ciena_tl1`; Cisco rows are unchanged.
 
@@ -1281,6 +1281,28 @@ After login, `RTRV-NBR` lists the RNEs, and you address one by putting its TID i
 ```
 
 A TID that empty/`ALL`/the GNE's own SID is treated as local; an unknown or unreachable RNE TID returns `DENY`/`IIAC`. The TID-addressed short form `VERB:TID:CTAG;` and the strict `VERB::AID:CTAG;` form are both accepted. The standalone `ciena-6500-tl1` model is a GNE with no RNEs — `RTRV-NBR` returns an empty list.
+
+#### Dual-homed RNEs (`--rne-dual-home-pct`)
+
+Operators dual-home an RNE — reach it through two or more GNEs — so that losing one gateway does not lose the element. `--rne-dual-home-pct` draws that share of each GNE's remote NEs from a fleet-wide shared pool instead of a private one, so the same RNE turns up behind several gateways:
+
+```
+rcfg-sim-gen --distribution ciena-6500-tl1-gne:100 --rne-dual-home-pct 30
+```
+
+A shared RNE's inventory is derived from its TID, so **every gateway fronting it renders byte-identical equipment** — which is what lets a client recognise the two paths as one device rather than two. Its TID keeps the bare `RNE-<CITY>` form; a private RNE carries its gateway's index (`RNE-LAX0007`) so two gateways cannot collide on a city name by chance and present unrelated equipment under one name. Both forms stay matchable as `RNE-[A-Z0-9]+`.
+
+Gateways are also chained: device *N* always shares an `RNE-LINK<N>` element with device *N+1*, mirroring how optical networks dual-home an RNE between neighbouring gateways around a ring. That makes **any two adjacent ports** demonstrate dual-homing on every seed, rather than only when a random draw happens to collide:
+
+```
+port 22000: RNE-LINK0000  RNE-STL  RNE-LAX  RNE-MKE  RNE-SLC
+port 22001: RNE-LINK0000  RNE-LINK0001  RNE-BUF  RNE-PHL
+port 22002: RNE-LINK0001  RNE-LINK0002  RNE-CMH
+```
+
+Links count towards a gateway's 2–5 remote NEs rather than being added on top, and the last device in a fleet claims no forward link.
+
+The default is `0`: every RNE is private to its gateway, no extra draw is taken from the generator's stream, and output is byte-identical to a build without the option.
 
 #### SSH-layer auth vs in-band TL1 auth
 

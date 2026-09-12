@@ -32,8 +32,16 @@ func cienaServerMode(t *testing.T, authMode string) (port int, hostname string, 
 	return cienaModelServer(t, authMode, "ciena-6500-tl1")
 }
 
-// cienaModelServer generates one device of the given model and serves it.
+// cienaModelServer generates one device of the given model and serves it with
+// the standard test password.
 func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname string, srv *sshsrv.Server) {
+	t.Helper()
+	return cienaModelServerAuth(t, authMode, model, "admin")
+}
+
+// cienaModelServerAuth is cienaModelServer with an explicit accepted password,
+// so a complex one can be driven end to end over the wire.
+func cienaModelServerAuth(t *testing.T, authMode, model, password string) (port int, hostname string, srv *sshsrv.Server) {
 	t.Helper()
 	tmp := t.TempDir()
 	manifest := filepath.Join(tmp, "manifest.csv")
@@ -44,7 +52,7 @@ func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname 
 		Count: 1, OutputDir: configsDir, ManifestPath: manifest,
 		IPBase: "127.0.0.1", IPCount: 1, PortStart: sshPort, DevicesPerIP: 1,
 		Seed: 7, Distribution: model + ":100",
-		Username: "admin", Password: "admin", EnablePassword: "enable123",
+		Username: "admin", Password: password, EnablePassword: "enable123",
 	}, io.Discard); err != nil {
 		t.Fatalf("generator: %v", err)
 	}
@@ -54,7 +62,7 @@ func cienaModelServer(t *testing.T, authMode, model string) (port int, hostname 
 	srv, err = sshsrv.New(sshsrv.Config{
 		ListenIP: "127.0.0.1", PortStart: sshPort, PortCount: 1,
 		ManifestPath: manifest, HostKeyPath: filepath.Join(tmp, "host"),
-		Username: "admin", Password: "admin", EnablePassword: "enable123",
+		Username: "admin", Password: password, EnablePassword: "enable123",
 		SSHAuthMode:        authMode,
 		ResponseDelayMinMS: 0, ResponseDelayMaxMS: 0,
 		MaxConcurrentSessions: 4,
@@ -99,6 +107,51 @@ func TestCiena_LoginAndRtrvEqpt(t *testing.T) {
 	if n := histogramLabelSampleCount(t, srv.Metrics().Gatherer(),
 		"rcfgsim_command_duration_seconds", "command", "CmdTL1RtrvEqpt"); n < 1 {
 		t.Errorf("rcfgsim_command_duration_seconds{command=CmdTL1RtrvEqpt}: want >=1 sample, got %d", n)
+	}
+}
+
+// A real 6500 rejects a complex password unless it is wrapped in double quotes,
+// which is the form rConfig now always sends. Drive the quoted ACT-USER over a
+// real SSH channel and confirm the simulator authenticates it — this is the
+// contract the rconfig8 TL1 integration suite depends on.
+func TestCiena_QuotedPasswordLogin(t *testing.T) {
+	// Contains ":" — the TL1 field separator — and ";", the wire terminator.
+	const complexPassword = `Tr@ns!p:rt;#2026`
+
+	port, sid, _ := cienaModelServerAuth(t, "", "ciena-6500-tl1", complexPassword)
+	ec := dialExpect(t, port, "admin", complexPassword)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+
+	ec.reset()
+	ec.send(`ACT-USER::admin:100::"` + complexPassword + `";`)
+	login := ec.expect("M  100 COMPLD", 3*time.Second)
+	if !strings.Contains(login, sid) {
+		t.Errorf("quoted-password login COMPLD should carry SID %q: %q", sid, login)
+	}
+
+	// The session really is logged in: a post-login verb must not DENY.
+	ec.reset()
+	ec.send("RTRV-EQPT::ALL:101;")
+	ec.expect("M  101 COMPLD", 3*time.Second)
+}
+
+// A wrong password sent in the quoted form must still be denied — the quotes are
+// framing, not an authentication bypass.
+func TestCiena_QuotedPasswordWrongIsDenied(t *testing.T) {
+	const complexPassword = `Tr@ns!p:rt;#2026`
+
+	port, _, _ := cienaModelServerAuth(t, "none", "ciena-6500-tl1", complexPassword)
+	ec := dialExpectNoAuth(t, port)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+	ec.reset()
+	ec.send(`ACT-USER::admin:100::"WRONG:pass";`)
+	got := ec.expect("M  100 DENY", 3*time.Second)
+	if !strings.Contains(got, "PLNA") {
+		t.Errorf("wrong quoted password should DENY with PLNA: %q", got)
 	}
 }
 
@@ -151,6 +204,145 @@ func TestCiena_DriverModeNoAuth(t *testing.T) {
 // log in to the GNE, list RNEs via RTRV-NBR, address an RNE by TID (EQPT streamed
 // with the RNE's SID in the header), confirm GNE-local commands still work, and
 // that an unknown TID is denied with IIAC.
+// cienaDualHomedFleet generates a fleet of GNEs with dual-homing turned all the way up
+// and serves them on consecutive ports, so the same RNE is fronted by several gateways.
+func cienaDualHomedFleet(t *testing.T, count int) (portStart int) {
+	t.Helper()
+	tmp := t.TempDir()
+	manifest := filepath.Join(tmp, "manifest.csv")
+	configsDir := filepath.Join(tmp, "configs")
+	sshPort := freePort(t)
+
+	if _, err := configs.Run(configs.Config{
+		Count: count, OutputDir: configsDir, ManifestPath: manifest,
+		IPBase: "127.0.0.1", IPCount: 1, PortStart: sshPort, DevicesPerIP: count,
+		Seed: 7, Distribution: "ciena-6500-tl1-gne:100",
+		Username: "admin", Password: "admin", EnablePassword: "enable123",
+		RNEDualHomePct: 100,
+	}, io.Discard); err != nil {
+		t.Fatalf("generator: %v", err)
+	}
+
+	srv, err := sshsrv.New(sshsrv.Config{
+		ListenIP: "127.0.0.1", PortStart: sshPort, PortCount: count,
+		ManifestPath: manifest, HostKeyPath: filepath.Join(tmp, "host"),
+		Username: "admin", Password: "admin", EnablePassword: "enable123",
+		SSHAuthMode:        "none",
+		ResponseDelayMinMS: 0, ResponseDelayMaxMS: 0,
+		MaxConcurrentSessions: 8,
+		MetricsAddr:           fmt.Sprintf("127.0.0.1:%d", freePort(t)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { srv.Shutdown(5 * time.Second) })
+
+	return sshPort
+}
+
+// neighbourTIDs logs into one GNE and returns the RNE TIDs it reports.
+func neighbourTIDs(t *testing.T, port int) []string {
+	t.Helper()
+	ec := dialExpectNoAuth(t, port)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+	ec.reset()
+	ec.send("ACT-USER::admin:1::admin;")
+	ec.expect("M  1 COMPLD", 3*time.Second)
+
+	ec.reset()
+	ec.send("RTRV-NBR:ALL:2;")
+	nbr := ec.expect("M  2 COMPLD", 3*time.Second)
+
+	var tids []string
+	for _, m := range regexp.MustCompile(`"(RNE-[A-Z0-9]+):`).FindAllStringSubmatch(nbr, -1) {
+		tids = append(tids, m[1])
+	}
+
+	return tids
+}
+
+// rneInventory retrieves one RNE's equipment inventory through a given gateway and
+// returns just the payload lines.
+//
+// The response header carries a live timestamp, so only the inventory body between the
+// COMPLD line and the block terminator can be compared between two sessions.
+func rneInventory(t *testing.T, port int, tid string) string {
+	t.Helper()
+	ec := dialExpectNoAuth(t, port)
+	defer ec.close()
+
+	ec.expect("< ", 3*time.Second)
+	ec.reset()
+	ec.send("ACT-USER::admin:1::admin;")
+	ec.expect("M  1 COMPLD", 3*time.Second)
+
+	ec.reset()
+	ec.send(fmt.Sprintf("RTRV-EQPT:%s:3;", tid))
+	// The inventory streams after the header, so read on to the prompt that follows the
+	// whole block rather than stopping at the COMPLD line.
+	block := ec.expect("< ", 5*time.Second)
+
+	const compldMarker = "M  3 COMPLD"
+	start := strings.Index(block, compldMarker)
+	if start < 0 {
+		t.Fatalf("no COMPLD in RTRV-EQPT response through port %d: %q", port, block)
+	}
+	start += len(compldMarker)
+
+	body := block[start:]
+	if end := strings.Index(body, "\n;"); end >= 0 {
+		body = body[:end]
+	}
+
+	return strings.TrimSpace(body)
+}
+
+// The point of dual-homing: one RNE, reachable through more than one gateway, reporting
+// the same equipment either way. If the two paths disagreed, rConfig would be right to
+// treat them as two different devices — so this is the contract the dedup depends on.
+func TestCiena_DualHomedRNEIsIdenticalThroughEitherGateway(t *testing.T) {
+	const fleet = 8
+	portStart := cienaDualHomedFleet(t, fleet)
+
+	// Which gateways front which RNEs.
+	frontedBy := map[string][]int{}
+	for i := 0; i < fleet; i++ {
+		port := portStart + i
+		for _, tid := range neighbourTIDs(t, port) {
+			frontedBy[tid] = append(frontedBy[tid], port)
+		}
+	}
+
+	shared, ports := "", []int(nil)
+	for tid, p := range frontedBy {
+		if len(p) >= 2 {
+			shared, ports = tid, p
+
+			break
+		}
+	}
+
+	if shared == "" {
+		t.Fatal("no RNE was reported by two gateways: dual-homing did not happen")
+	}
+
+	first := rneInventory(t, ports[0], shared)
+	if !strings.Contains(first, "TYPE=6500-7SLOT") {
+		t.Fatalf("inventory through gateway %d looks wrong: %q", ports[0], first)
+	}
+
+	for _, port := range ports[1:] {
+		if got := rneInventory(t, port, shared); got != first {
+			t.Errorf("RNE %s reports different equipment through gateway %d than through %d", shared, port, ports[0])
+		}
+	}
+}
+
 func TestCiena_GNE_RNERouting(t *testing.T) {
 	port, gneSID, srv := cienaModelServer(t, "none", "ciena-6500-tl1-gne")
 	ec := dialExpectNoAuth(t, port)
