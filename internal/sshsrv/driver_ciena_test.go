@@ -15,8 +15,8 @@ func tl1Ctx(user, pass string) *sessionCtx {
 	}
 }
 
-func newTL1Session(ctx *sessionCtx) *tl1Session {
-	return &tl1Session{sid: ctx.dev.Hostname, serial: ctx.dev.SerialNumber}
+func newTL1Session(ctx *sessionCtx) *cienaSession {
+	return &cienaSession{sid: ctx.dev.Hostname, serial: ctx.dev.SerialNumber}
 }
 
 func TestTL1LoginGate(t *testing.T) {
@@ -24,7 +24,7 @@ func TestTL1LoginGate(t *testing.T) {
 	s := newTL1Session(ctx)
 
 	// Before login: any RTRV is denied.
-	cmd, resp := ctx.dispatchTL1("RTRV-EQPT::ALL:100", s)
+	cmd, resp := ctx.dispatchCiena("RTRV-EQPT::ALL:100", s)
 	if cmd != CmdTL1Deny {
 		t.Fatalf("pre-login RTRV-EQPT: cmd=%v, want CmdTL1Deny", cmd)
 	}
@@ -36,7 +36,7 @@ func TestTL1LoginGate(t *testing.T) {
 	}
 
 	// Valid ACT-USER unlocks.
-	cmd, resp = ctx.dispatchTL1("ACT-USER::admin:100::admin", s)
+	cmd, resp = ctx.dispatchCiena("ACT-USER::admin:100::admin", s)
 	if cmd != CmdTL1ActUser {
 		t.Fatalf("ACT-USER: cmd=%v, want CmdTL1ActUser", cmd)
 	}
@@ -48,7 +48,7 @@ func TestTL1LoginGate(t *testing.T) {
 	}
 
 	// After login: RTRV-EQPT completes.
-	cmd, resp = ctx.dispatchTL1("RTRV-EQPT::ALL:101", s)
+	cmd, resp = ctx.dispatchCiena("RTRV-EQPT::ALL:101", s)
 	if cmd != CmdTL1RtrvEqpt {
 		t.Fatalf("post-login RTRV-EQPT: cmd=%v, want CmdTL1RtrvEqpt", cmd)
 	}
@@ -61,7 +61,7 @@ func TestTL1Credentials(t *testing.T) {
 	// Wrong password is denied, session stays logged out.
 	ctx := tl1Ctx("admin", "admin")
 	s := newTL1Session(ctx)
-	cmd, _ := ctx.dispatchTL1("ACT-USER::admin:100::WRONG", s)
+	cmd, _ := ctx.dispatchCiena("ACT-USER::admin:100::WRONG", s)
 	if cmd != CmdTL1Deny || s.loggedIn {
 		t.Errorf("wrong password: cmd=%v loggedIn=%v, want CmdTL1Deny/false", cmd, s.loggedIn)
 	}
@@ -69,7 +69,7 @@ func TestTL1Credentials(t *testing.T) {
 	// Empty configured password accepts any password (mirrors PasswordCallback).
 	ctxAny := tl1Ctx("admin", "")
 	sAny := newTL1Session(ctxAny)
-	cmd, _ = ctxAny.dispatchTL1("ACT-USER::admin:100::whatever", sAny)
+	cmd, _ = ctxAny.dispatchCiena("ACT-USER::admin:100::whatever", sAny)
 	if cmd != CmdTL1ActUser || !sAny.loggedIn {
 		t.Errorf("empty-password accept-any: cmd=%v loggedIn=%v, want CmdTL1ActUser/true", cmd, sAny.loggedIn)
 	}
@@ -84,7 +84,7 @@ func TestTL1ComplexPasswordCredentials(t *testing.T) {
 
 	ctx := tl1Ctx("admin", complexPassword)
 	s := newTL1Session(ctx)
-	cmd, _ := ctx.dispatchTL1(`ACT-USER::admin:100::"`+complexPassword+`"`, s)
+	cmd, _ := ctx.dispatchCiena(`ACT-USER::admin:100::"`+complexPassword+`"`, s)
 	if cmd != CmdTL1ActUser || !s.loggedIn {
 		t.Errorf("quoted complex password: cmd=%v loggedIn=%v, want CmdTL1ActUser/true", cmd, s.loggedIn)
 	}
@@ -94,14 +94,14 @@ func TestTL1ComplexPasswordCredentials(t *testing.T) {
 	// Real hardware needs the quotes; the simulator is deliberately liberal so an
 	// older rConfig build keeps working against a newer simulator.
 	sBare := newTL1Session(ctx)
-	cmd, _ = ctx.dispatchTL1("ACT-USER::admin:100::"+complexPassword, sBare)
+	cmd, _ = ctx.dispatchCiena("ACT-USER::admin:100::"+complexPassword, sBare)
 	if cmd != CmdTL1ActUser || !sBare.loggedIn {
 		t.Errorf("bare complex password: cmd=%v loggedIn=%v, want CmdTL1ActUser/true", cmd, sBare.loggedIn)
 	}
 
 	// A wrong password is still denied when quoted — the quotes are framing, not a bypass.
 	sWrong := newTL1Session(ctx)
-	cmd, _ = ctx.dispatchTL1(`ACT-USER::admin:100::"WRONG:pass"`, sWrong)
+	cmd, _ = ctx.dispatchCiena(`ACT-USER::admin:100::"WRONG:pass"`, sWrong)
 	if cmd != CmdTL1Deny || sWrong.loggedIn {
 		t.Errorf("wrong quoted password: cmd=%v loggedIn=%v, want CmdTL1Deny/false", cmd, sWrong.loggedIn)
 	}
@@ -110,7 +110,7 @@ func TestTL1ComplexPasswordCredentials(t *testing.T) {
 func TestTL1BlockShape(t *testing.T) {
 	ctx := tl1Ctx("admin", "admin")
 	s := newTL1Session(ctx)
-	_, resp := ctx.dispatchTL1("ACT-USER::admin:CTAG7::admin", s)
+	_, resp := ctx.dispatchCiena("ACT-USER::admin:CTAG7::admin", s)
 	out := string(resp.Output)
 
 	if !strings.HasPrefix(out, "\r\n") {
@@ -148,7 +148,7 @@ func TestRequireSSHAuth(t *testing.T) {
 	}
 }
 
-func gneSession(t *testing.T) (*sessionCtx, *tl1Session) {
+func gneSession(t *testing.T) (*sessionCtx, *cienaSession) {
 	t.Helper()
 	ctx := tl1Ctx("admin", "admin")
 	data := []byte("   \"SHELF-1::GNE\"\n;;RNE RNE-CORK\n   \"SHELF-1::CORK\"\n;;RNE RNE-GALWAY\n   \"SHELF-1::GAL\"\n")
@@ -163,7 +163,7 @@ func TestTL1GNERouting(t *testing.T) {
 	ctx, s := gneSession(t)
 
 	// Local RTRV-EQPT streams the GNE section; header SID is the GNE.
-	cmd, resp := ctx.dispatchTL1("RTRV-EQPT::ALL:100", s)
+	cmd, resp := ctx.dispatchCiena("RTRV-EQPT::ALL:100", s)
 	if cmd != CmdTL1RtrvEqpt || string(resp.ConfigOutput) != "   \"SHELF-1::GNE\"\n" {
 		t.Errorf("local EQPT: cmd=%v body=%q", cmd, resp.ConfigOutput)
 	}
@@ -172,7 +172,7 @@ func TestTL1GNERouting(t *testing.T) {
 	}
 
 	// RTRV-EQPT to an RNE streams that RNE's section; header SID is the RNE TID.
-	cmd, resp = ctx.dispatchTL1("RTRV-EQPT:RNE-CORK:3", s)
+	cmd, resp = ctx.dispatchCiena("RTRV-EQPT:RNE-CORK:3", s)
 	if cmd != CmdTL1RtrvEqpt || string(resp.ConfigOutput) != "   \"SHELF-1::CORK\"\n" {
 		t.Errorf("RNE EQPT: cmd=%v body=%q", cmd, resp.ConfigOutput)
 	}
@@ -181,13 +181,13 @@ func TestTL1GNERouting(t *testing.T) {
 	}
 
 	// Unknown TID -> DENY IIAC.
-	cmd, resp = ctx.dispatchTL1("RTRV-EQPT:RNE-NOPE:9", s)
+	cmd, resp = ctx.dispatchCiena("RTRV-EQPT:RNE-NOPE:9", s)
 	if cmd != CmdTL1Deny || !strings.Contains(string(resp.Output), "IIAC") {
 		t.Errorf("unknown TID: cmd=%v out=%q, want DENY/IIAC", cmd, resp.Output)
 	}
 
 	// RNE-targeted alarm: header SID is the RNE.
-	cmd, resp = ctx.dispatchTL1("RTRV-ALM-ALL:RNE-GALWAY:4", s)
+	cmd, resp = ctx.dispatchCiena("RTRV-ALM-ALL:RNE-GALWAY:4", s)
 	if cmd != CmdTL1RtrvAlmAll || !strings.Contains(string(resp.Output), "RNE-GALWAY") {
 		t.Errorf("RNE alarm: cmd=%v out=%q", cmd, resp.Output)
 	}
@@ -195,32 +195,32 @@ func TestTL1GNERouting(t *testing.T) {
 
 func TestTL1RtrvNbr(t *testing.T) {
 	ctx, s := gneSession(t)
-	cmd, resp := ctx.dispatchTL1("RTRV-NBR:ALL:2", s)
-	if cmd != CmdTL1RtrvNbr {
-		t.Fatalf("RTRV-NBR: cmd=%v, want CmdTL1RtrvNbr", cmd)
+	cmd, resp := ctx.dispatchCiena("RTRV-NE-LIST:ALL:2", s)
+	if cmd != CmdTL1RtrvNeList {
+		t.Fatalf("RTRV-NE-LIST: cmd=%v, want CmdTL1RtrvNeList", cmd)
 	}
 	out := string(resp.Output)
 	for _, tid := range []string{"RNE-CORK", "RNE-GALWAY"} {
 		if !strings.Contains(out, tid) {
-			t.Errorf("RTRV-NBR list missing %q: %q", tid, out)
+			t.Errorf("RTRV-NE-LIST list missing %q: %q", tid, out)
 		}
 	}
 
-	// A standalone (no-RNE) session answers RTRV-NBR with an empty COMPLD.
+	// A standalone (no-RNE) session answers RTRV-NE-LIST with an empty COMPLD.
 	ctxS := tl1Ctx("admin", "admin")
 	sStandalone := newTL1Session(ctxS)
 	sStandalone.loggedIn = true
-	cmd, resp = ctxS.dispatchTL1("RTRV-NBR:ALL:2", sStandalone)
-	if cmd != CmdTL1RtrvNbr || !strings.Contains(string(resp.Output), "M  2 COMPLD") {
-		t.Errorf("standalone RTRV-NBR: cmd=%v out=%q", cmd, resp.Output)
+	cmd, resp = ctxS.dispatchCiena("RTRV-NE-LIST:ALL:2", sStandalone)
+	if cmd != CmdTL1RtrvNeList || !strings.Contains(string(resp.Output), "M  2 COMPLD") {
+		t.Errorf("standalone RTRV-NE-LIST: cmd=%v out=%q", cmd, resp.Output)
 	}
 }
 
 func TestTL1UnknownVerb(t *testing.T) {
 	ctx := tl1Ctx("admin", "admin")
 	s := newTL1Session(ctx)
-	ctx.dispatchTL1("ACT-USER::admin:1::admin", s) // log in first
-	cmd, resp := ctx.dispatchTL1("ENT-CRS-OCH::FOO:9", s)
+	ctx.dispatchCiena("ACT-USER::admin:1::admin", s) // log in first
+	cmd, resp := ctx.dispatchCiena("ENT-CRS-OCH::FOO:9", s)
 	if cmd != CmdTL1Unknown {
 		t.Errorf("unknown verb: cmd=%v, want CmdTL1Unknown", cmd)
 	}

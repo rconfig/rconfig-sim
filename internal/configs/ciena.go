@@ -29,6 +29,10 @@ func modelHostname(data any) string {
 		return d.SID
 	case CienaGNEData:
 		return d.SID // the GNE is the SSH-addressable node; RNEs are not manifest rows
+	case InfineraNodeData:
+		return d.SID // the attached node; remote nodes are not manifest rows
+	case CiscoONSGNEData:
+		return d.SID // the gateway; end NEs are not manifest rows
 	default:
 		return ""
 	}

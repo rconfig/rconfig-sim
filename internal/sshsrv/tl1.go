@@ -100,7 +100,7 @@ func (ctx *sessionCtx) validTL1Login(user, pass string) bool {
 // The verb is field 0 and the TID is field 1. CTAG is the 4th field (index 3)
 // in the strict form (VERB::AID:CTAG, e.g. "RTRV-EQPT::ALL:100"), but operators
 // commonly omit the empty AID placeholder when addressing an NE directly
-// (VERB:TID:CTAG, e.g. "RTRV-EQPT:RNE-LIMERICK:3" or "RTRV-NBR:ALL:2"). So CTAG
+// (VERB:TID:CTAG, e.g. "RTRV-EQPT:RNE-LIMERICK:3" or "RTRV-NE-LIST:ALL:2"). So CTAG
 // is field 3 when the command has 4+ fields, otherwise the last field. (The ";"
 // terminator is stripped by readTL1 before this is called, so it is never a field.)
 
@@ -235,10 +235,29 @@ func tl1Timestamp() string {
 // (zero-copy RTRV-EQPT) and the ";" terminator comes via Response.Trailer.
 
 func tl1CompldHeader(sid, ctag string) []byte {
+	return tl1BlockHeader(sid, ctag, "COMPLD")
+}
+
+// tl1BlockHeader frames one response block with an explicit completion code.
+//
+// COMPLD and DENY are terminal: the response ends there. RTRV and PRTL are continuations,
+// meaning "more blocks follow for this same CTAG" - which is how a node pages a long answer.
+// A client that treats every block as terminal reads the first one and leaves the rest on the
+// wire, where they surface as the next command's reply.
+func tl1BlockHeader(sid, ctag, code string) []byte {
 	var b strings.Builder
 	b.WriteString("\r\n")
 	fmt.Fprintf(&b, "   %s %s\r\n", sid, tl1Timestamp())
-	fmt.Fprintf(&b, "M  %s COMPLD\r\n", ctag)
+	fmt.Fprintf(&b, "M  %s %s\r\n", ctag, code)
+	return []byte(b.String())
+}
+
+// tl1Block builds one complete response block: header, payload, terminator.
+func tl1Block(sid, ctag, code, payload string) []byte {
+	var b strings.Builder
+	b.Write(tl1BlockHeader(sid, ctag, code))
+	b.WriteString(payload)
+	b.WriteString(";\r\n")
 	return []byte(b.String())
 }
 
