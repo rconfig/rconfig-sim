@@ -32,8 +32,8 @@ The project follows [Semantic Versioning 2.0.0](https://semver.org/) and [Keep a
 
 ### Breaking-change surface (assume external users depend on these)
 
-- Model names (the `--distribution` / `size_bucket` keys in the `registry`, [internal/configs/generator.go](internal/configs/generator.go)): the Cisco size labels `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`, `5xl`, `6xl`, plus `ciena-6500-tl1`
-- Driver/template ids in the manifest `template` column (`cisco_ios`, `ciena_tl1`) — the runtime resolves the per-device driver from these (see `driverFor`, [internal/sshsrv/driver.go](internal/sshsrv/driver.go))
+- Model names (the `--distribution` / `size_bucket` keys in the `registry`, [internal/configs/generator.go](internal/configs/generator.go)): the Cisco size labels `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`, `5xl`, `6xl`, plus `ciena-6500-tl1`, `ciena-6500-tl1-gne`, `infinera-dtnx-tl1`, `cisco-ons15454-tl1`
+- Driver/template ids in the manifest `template` column (`cisco_ios`, `ciena_tl1`, `infinera_tl1`, `cisco_ons_tl1`) — the runtime resolves the per-device driver from these (see `driverFor`, [internal/sshsrv/driver.go](internal/sshsrv/driver.go))
 - `--distribution` string syntax (`model:weight,...`)
 - All CLI flag names and defaults on both binaries
 - Manifest CSV header order

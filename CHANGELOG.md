@@ -8,6 +8,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **Infinera DTN-X TL1 (`infinera-dtnx-tl1`)** and **Cisco ONS 15454 TL1 (`cisco-ons15454-tl1`)**
+  models and drivers, joining Ciena on the shared TL1 core. Both are gateway personalities:
+  one addressable node whose config carries the inventories of the elements behind it.
+  Infinera answers `RTRV-TIDMAP` with keyword records and an empty AID; Cisco answers
+  `RTRV-MAP-NETWORK` with **positional** records (`"<IPADDR>,<NODENAME>,<PRODUCT>"`). Three
+  vendors, three different neighbour grammars, which is the point.
+- **Infinera pages its RTRV-TIDMAP response**, as a real DTN-X does: every block but the last
+  is coded `RTRV` rather than `COMPLD`, with the prompt written between blocks. A client that
+  reads to the first prompt gets a partial answer and leaves the rest on the wire, where it
+  surfaces as the reply to the next command. Simulating that is the only way the behaviour can
+  be tested.
+- **Infinera keeps its own system name in the response header** when relaying for another
+  node, so a client cannot verify routing by comparing the header SID to the TID it addressed.
+  Pinned by test, because it is easy to mistake for a bug and "fix".
+- rcfg-sim now **refuses to start** when a manifest names a driver id no driver is registered
+  for, instead of silently serving those devices as Cisco IOS.
+
+### Changed
+
+- **Ciena neighbour discovery now answers `RTRV-NE-LIST` with the real 6500 record shape**
+  (`"SHELF-1::SID=\"X\",NENAME=\"X\",GNE=NO,GNEIPADDR=,INETADDR=...,COST=...,NETYPE=..."`),
+  replacing `RTRV-NBR` and its invented `PROTOCOL=OSC,REACHABLE=YES` payload. The old command
+  and format were not taken from hardware, and no real node answers them. **Breaking** for
+  anything parsing the previous output. The metric label follows the verb:
+  `CmdTL1RtrvNbr` becomes `CmdTL1RtrvNeList`.
+
 - **Dual-homed RNEs (`--rne-dual-home-pct`)** — that percentage of each GNE's remote NEs is
   drawn from a fleet-wide shared pool instead of a private one, so the same RNE is reachable
   through several gateways, as operators deploy them for resilience. A shared RNE's shelf is
