@@ -201,7 +201,7 @@ func TestCiena_DriverModeNoAuth(t *testing.T) {
 }
 
 // TestCiena_GNE_RNERouting drives the full GNE/RNE example session over the wire:
-// log in to the GNE, list RNEs via RTRV-NBR, address an RNE by TID (EQPT streamed
+// log in to the GNE, list RNEs via RTRV-NE-LIST, address an RNE by TID (EQPT streamed
 // with the RNE's SID in the header), confirm GNE-local commands still work, and
 // that an unknown TID is denied with IIAC.
 // cienaDualHomedFleet generates a fleet of GNEs with dual-homing turned all the way up
@@ -255,11 +255,11 @@ func neighbourTIDs(t *testing.T, port int) []string {
 	ec.expect("M  1 COMPLD", 3*time.Second)
 
 	ec.reset()
-	ec.send("RTRV-NBR:ALL:2;")
+	ec.send("RTRV-NE-LIST:ALL:2;")
 	nbr := ec.expect("M  2 COMPLD", 3*time.Second)
 
 	var tids []string
-	for _, m := range regexp.MustCompile(`"(RNE-[A-Z0-9]+):`).FindAllStringSubmatch(nbr, -1) {
+	for _, m := range regexp.MustCompile(`SID=\\"(RNE-[A-Z0-9]+)`).FindAllStringSubmatch(nbr, -1) {
 		tids = append(tids, m[1])
 	}
 
@@ -353,13 +353,13 @@ func TestCiena_GNE_RNERouting(t *testing.T) {
 	ec.send("ACT-USER::admin:1::admin;")
 	ec.expect("M  1 COMPLD", 3*time.Second)
 
-	// RTRV-NBR lists the RNEs behind this GNE; pull one TID out of the response.
+	// RTRV-NE-LIST lists the RNEs behind this GNE; pull one TID out of the response.
 	ec.reset()
-	ec.send("RTRV-NBR:ALL:2;")
+	ec.send("RTRV-NE-LIST:ALL:2;")
 	nbr := ec.expect("M  2 COMPLD", 3*time.Second)
-	m := regexp.MustCompile(`"(RNE-[A-Z0-9]+):`).FindStringSubmatch(nbr)
+	m := regexp.MustCompile(`SID=\\"(RNE-[A-Z0-9]+)`).FindStringSubmatch(nbr)
 	if m == nil {
-		t.Fatalf("RTRV-NBR returned no RNE TID: %q", nbr)
+		t.Fatalf("RTRV-NE-LIST returned no RNE TID: %q", nbr)
 	}
 	rne := m[1]
 
@@ -395,8 +395,8 @@ func TestCiena_GNE_RNERouting(t *testing.T) {
 	}
 
 	if n := histogramLabelSampleCount(t, srv.Metrics().Gatherer(),
-		"rcfgsim_command_duration_seconds", "command", "CmdTL1RtrvNbr"); n < 1 {
-		t.Errorf("rcfgsim_command_duration_seconds{command=CmdTL1RtrvNbr}: want >=1 sample, got %d", n)
+		"rcfgsim_command_duration_seconds", "command", "CmdTL1RtrvNeList"); n < 1 {
+		t.Errorf("rcfgsim_command_duration_seconds{command=CmdTL1RtrvNeList}: want >=1 sample, got %d", n)
 	}
 }
 

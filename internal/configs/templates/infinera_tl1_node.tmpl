@@ -1,0 +1,8 @@
+{{- /* DTN-X node inventory followed by one ";;NODE <TID>" section per remote node.
+       The infinera_tl1 driver splits on the ";;NODE " marker lines (column 0) at
+       session start and streams the local or a targeted remote node's section. */ -}}
+{{- template "optical_node_body" . -}}
+{{- range .Remotes -}}
+;;NODE {{ .SID }}
+{{ template "optical_node_body" . -}}
+{{- end -}}

@@ -92,13 +92,15 @@ var registry = func() map[string]model {
 	}
 	r[cienaModelName] = cienaModel()
 	r[cienaGNEModelName] = cienaGNEModel()
+	r[infineraModelName] = infineraModel()
+	r[ciscoONSModelName] = ciscoONSModel()
 	return r
 }()
 
 // modelOrder is the canonical iteration order: the Cisco buckets in their
 // existing order, then non-Cisco models appended. Keeping Cisco first and
 // unchanged is what preserves deterministic assignment for legacy invocations.
-var modelOrder = append(append([]string{}, bucketOrder...), cienaModelName, cienaGNEModelName)
+var modelOrder = append(append([]string{}, bucketOrder...), cienaModelName, cienaGNEModelName, infineraModelName, ciscoONSModelName)
 
 // profile holds the per-size-bucket generation counts.
 type profile struct {

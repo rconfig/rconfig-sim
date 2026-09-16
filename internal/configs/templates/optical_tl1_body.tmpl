@@ -1,0 +1,4 @@
+{{- define "optical_node_body"}}   "CHASSIS-1::PROVISIONED,SN={{ .Serial }},SWVER={{ .SwVersion }},IP={{ .NodeIP }}:IS-NR"
+{{ range .Slots }}   "SLOT-{{ .Slot }}::{{ .CardType }},SN={{ .Serial }}:{{ .State }}"
+{{ end }}
+{{- end -}}

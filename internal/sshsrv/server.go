@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ type Config struct {
 	// SSHAuthMode controls whether the SSH transport authenticates the client
 	// before the interactive session starts:
 	//   "password" (default) — every device requires SSH password auth.
-	//   "driver"             — the device's driver decides (Cisco yes, Ciena TL1 no).
+	//   "driver"             — the device's driver decides (Cisco IOS yes, every TL1 driver no).
 	//   "none"               — no SSH auth for any device; in-band auth only.
 	// Empty is treated as "password" for backward compatibility.
 	SSHAuthMode           string
@@ -106,6 +107,12 @@ func New(cfg Config) (*Server, error) {
 	for _, d := range devs {
 		devMap[d.Port] = d
 		total += d.Size
+	}
+
+	// Refuse to start on a manifest naming a driver we do not have, rather than silently
+	// serving those devices as Cisco IOS.
+	if bad := unknownDrivers(devs); len(bad) > 0 {
+		return nil, fmt.Errorf("manifest names unknown driver(s) in the template column: %s", strings.Join(bad, ", "))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

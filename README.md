@@ -55,7 +55,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 ## Documentation
 
 The full guide lives at **[simdocs.rconfig.com](https://simdocs.rconfig.com)** — installation,
-configuration, the driver framework, fault injection, metrics, worked Cisco IOS and Ciena TL1
+configuration, the driver framework, fault injection, metrics, worked Cisco IOS and TL1
 examples, load-test scenarios, and the complete CLI reference.
 
 This README is the at-a-glance overview; the docs site goes deeper. Some good entry points:
@@ -231,14 +231,33 @@ What each driver **owns**:
 | Driver id (`template`) | Vendor | Prompt | SSH auth | Commands |
 |---|---|---|---|---|
 | `cisco_ios` | Cisco | `host>` / `host#` | password, then `enable` | `show …`, `terminal …`, `enable`, `exit` |
-| `ciena_tl1` | Ciena | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-*` |
+| `ciena_tl1` | Ciena | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-NE-LIST`, `RTRV-NODES`, `RTRV-*` |
+| `infinera_tl1` | Infinera | `>` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-TIDMAP`, `RTRV-*` |
+| `cisco_ons_tl1` | Cisco | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-MAP-NETWORK`, `RTRV-*` |
+
+The three TL1 drivers share one core (`internal/sshsrv/tl1.go`: block reading, `ACT-USER`
+parsing, response framing) and differ where the hardware differs. That difference is the reason
+they are separate drivers rather than one with a vendor flag:
+
+| | Ciena 6500 | Infinera DTN-X | Cisco ONS 15454 |
+|---|---|---|---|
+| Neighbour command | `RTRV-NE-LIST` | `RTRV-TIDMAP` | `RTRV-MAP-NETWORK` |
+| Record grammar | keyword, quoted values | keyword, empty AID | **positional** `"<IPADDR>,<NODENAME>,<PRODUCT>"` |
+| Response | one block | **paged**: `RTRV` blocks, then `COMPLD` | one block |
+| Header SID when routing | the addressed TID | its own system name | the addressed TID |
+
+Two of those rows are traps a client will hit in production. Infinera paging means a client that
+reads to the first prompt gets a partial answer and leaves the remaining blocks on the wire, where
+they surface as the reply to the *next* command. And because Infinera answers under its own system
+name, a client cannot confirm routing by comparing the header SID to the TID it addressed. The
+simulator reproduces both on purpose, and both are pinned by tests.
 
 **Adding a vendor** is two small pieces, with no change to the core loop:
 
 1. **Runtime** — a `Driver` implementation in `internal/sshsrv/driver_<vendor>.go`, registered via `init()`. It declares its metric command labels (`Commands()`) and SSH-auth requirement (`RequiresSSHAuth()`), and implements `Serve()`, calling the shared `applyResponseDelay` / `emit` helpers for the response path.
 2. **Generator** — a `model` entry in the registry (`internal/configs/generator.go`) carrying the vendor, driver id, template file, and a deterministic data-builder, plus a `templates/<name>.tmpl`.
 
-The manifest's `vendor`/`template` columns are the wiring between the two halves: the generator writes them per model, the loader reads them onto each `Device`, and `driverFor` resolves the runtime driver — defaulting to `cisco_ios` for empty or unknown values, so pre-existing manifests behave exactly as before.
+The manifest's `vendor`/`template` columns are the wiring between the two halves: the generator writes them per model, the loader reads them onto each `Device`, and `driverFor` resolves the runtime driver. An empty value still means `cisco_ios`, so pre-existing manifests behave exactly as before, but a **non-empty id no driver is registered for is now a startup error**. Serving a typo'd `infinera_tl1` as Cisco IOS produced a fleet that looked healthy and answered the wrong protocol.
 
 ### Data flow for a single collection run
 
@@ -1238,8 +1257,13 @@ The generator is driven by a **model registry**, of which the nine Cisco size bu
 |---|---|---|---|---|
 | `ciena-6500-tl1` | Ciena | `ciena_tl1` | TL1 over SSH | `RTRV-EQPT::ALL` shelf inventory (7-slot 6500), mmap-streamed |
 | `ciena-6500-tl1-gne` | Ciena | `ciena_tl1` | TL1 over SSH | Gateway NE fronting 2–5 Remote NEs; GNE + per-RNE inventories, mmap-streamed. `--rne-dual-home-pct` shares RNEs between gateways |
+| `infinera-dtnx-tl1` | Infinera | `infinera_tl1` | TL1 over SSH | DTN-X node fronting 12–30 remote nodes; **paged** `RTRV-TIDMAP`, per-node inventories, mmap-streamed |
+| `cisco-ons15454-tl1` | Cisco | `cisco_ons_tl1` | TL1 over SSH | ONS 15454 GNE fronting 3–8 End NEs; positional `RTRV-MAP-NETWORK` records, per-ENE inventories, mmap-streamed |
 
-Mix them into any run, e.g. `--distribution "sm:50,ciena-6500-tl1:50"`. Ciena rows in the manifest carry `vendor=Ciena, template=ciena_tl1`; Cisco rows are unchanged.
+Mix them into any run, e.g. `--distribution "sm:50,ciena-6500-tl1:50"` or
+`--distribution "ciena-6500-tl1-gne:40,infinera-dtnx-tl1:40,cisco-ons15454-tl1:20"` for a
+mixed-vendor optical fleet. Manifest rows carry the vendor and driver id for the model; Cisco IOS
+rows are unchanged.
 
 The Ciena 6500 personality is **not** Cisco IOS. After SSH connects it presents a bare `<` prompt and requires an in-band TL1 login before any command works:
 
@@ -1260,27 +1284,29 @@ M  100 COMPLD
 ;
 ```
 
-Commands are terminated by `;` (and may span lines). Recognised verbs: `ACT-USER`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`, `RTRV-SW-VER`, `RTRV-SYS`, `RTRV-NBR`. Anything before a valid `ACT-USER`, or any unrecognised verb, returns a TL1 `DENY` block.
+Commands are terminated by `;` (and may span lines). Recognised verbs: `ACT-USER`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`, `RTRV-SW-VER`, `RTRV-SYS`, `RTRV-NE-LIST`, `RTRV-NODES`. Anything before a valid `ACT-USER`, or any unrecognised verb, returns a TL1 `DENY` block.
 
 #### GNE / RNE topology (`ciena-6500-tl1-gne`)
 
 Real optical networks are reached through a **Gateway NE (GNE)** — the node you SSH into — which fronts several **Remote NEs (RNEs)** that have no direct management access of their own. The `ciena-6500-tl1-gne` model emulates this: each generated device is a GNE whose config also carries the inventories of 2–5 RNEs behind it.
 
-After login, `RTRV-NBR` lists the RNEs, and you address one by putting its TID in the command's TID field; the GNE returns that RNE's response (with the RNE's TID as the response SID). The same verb set works against any RNE.
+After login, `RTRV-NE-LIST` lists the RNEs, and you address one by putting its TID in the command's TID field; the GNE returns that RNE's response (with the RNE's TID as the response SID). The same verb set works against any RNE.
 
 ```
 < ACT-USER::admin:1::admin;          ← log into the GNE
-< RTRV-NBR:ALL:2;                     ← list the RNEs reachable through it
+< RTRV-NE-LIST:::2;                    ← list the RNEs reachable through it
    ...
-   "RNE-LIMERICK:PROTOCOL=OSC,REACHABLE=YES,STATE=IS-NR"
-   "RNE-GALWAY:PROTOCOL=OSC,REACHABLE=YES,STATE=IS-NR"
+   "SHELF-1::SID=\"RNE-LIMERICK\",NENAME=\"RNE-LIMERICK\",GNE=NO,GNEIPADDR=,INETADDR=10.0.254.3,COST=30,NETYPE=00011600"
+   "SHELF-1::SID=\"RNE-GALWAY\",NENAME=\"RNE-GALWAY\",GNE=NO,GNEIPADDR=,INETADDR=10.0.254.4,COST=40,NETYPE=00011600"
 ;
 < RTRV-EQPT:RNE-LIMERICK:3;           ← inventory of a specific RNE (TID in field 2)
 < RTRV-ALM-ALL:RNE-LIMERICK:4;        ← alarms for that RNE
 < RTRV-EQPT::ALL:100;                 ← GNE-own inventory (empty TID, as before)
 ```
 
-A TID that empty/`ALL`/the GNE's own SID is treated as local; an unknown or unreachable RNE TID returns `DENY`/`IIAC`. The TID-addressed short form `VERB:TID:CTAG;` and the strict `VERB::AID:CTAG;` form are both accepted. The standalone `ciena-6500-tl1` model is a GNE with no RNEs — `RTRV-NBR` returns an empty list.
+A TID that empty/`ALL`/the GNE's own SID is treated as local; an unknown or unreachable RNE TID returns `DENY`/`IIAC`. The TID-addressed short form `VERB:TID:CTAG;` and the strict `VERB::AID:CTAG;` form are both accepted. The standalone `ciena-6500-tl1` model is a GNE with no RNEs, and `RTRV-NE-LIST` returns an empty list.
+
+`RTRV-NODES` answers the same set in the 6500's other neighbour format, keyed on `TID=` with `REMOTESHELF`, `IPADDR`, `MEMBER` and `SITEID` fields. Both records come from customer session logs. The `RTRV-NBR` verb the simulator used before, and its `PROTOCOL=OSC,REACHABLE=YES` payload, were invented here and match no real node; they are gone.
 
 #### Dual-homed RNEs (`--rne-dual-home-pct`)
 
@@ -1304,6 +1330,92 @@ Links count towards a gateway's 2–5 remote NEs rather than being added on top,
 
 The default is `0`: every RNE is private to its gateway, no extra draw is taken from the generator's stream, and output is byte-identical to a build without the option.
 
+#### Infinera DTN-X (`infinera-dtnx-tl1`)
+
+A DTN-X is reached the same way, but nothing about the conversation after login is the same.
+Neighbours come from `RTRV-TIDMAP`, records are keyword-based with an **empty AID**, and TIDs are
+11-character alphanumeric names rather than city labels:
+
+```
+> ACT-USER::admin:1::"admin";
+> RTRV-TIDMAP:::2;
+
+   INF-SJC-1000 26-09-12 19:53:38
+M  2 RTRV
+   "::TID=STLTND1Y,NODEID=MA0353062311,ROUTERID=11.253.152.44"
+   ... 9 records in this block ...
+;
+
+>
+   INF-SJC-1000 26-09-12 19:53:38
+M  2 RTRV
+   ... 10 more ...
+;
+
+>
+   INF-SJC-1000 26-09-12 19:53:38
+M  2 COMPLD
+   "::TID=TUSTNN2Y,NODEID=MA8953593801,ROUTERID=11.253.152.64"
+;
+
+>
+```
+
+Two things in that transcript are the reason this driver exists.
+
+**The response is paged.** Ten records per block, every block but the last coded `RTRV` instead of
+`COMPLD`, and the `>` prompt written between them. A client that reads until it sees a prompt gets
+page one, returns it as the whole answer, and leaves pages two onwards sitting in the socket, where
+they arrive as the reply to its *next* command. From there every remaining command in the session
+sees the wrong reply. Generated nodes carry 12 to 30 remotes precisely so the paging path is always
+exercised: a fleet that never pages cannot regression-test the fix.
+
+**Routed responses keep the system name.** When you address a remote TID, the response header still
+carries the gateway's own system name (`LXTNKYXAO4Z`), not the TID you asked for. A client that
+confirms routing by comparing the two rejects every routed collection. Ciena does echo the TID, so
+this is exactly the kind of difference that gets "fixed" by someone assuming all TL1 behaves alike;
+`TestInfineraRoutedResponseKeepsSystemName` is there to stop that.
+
+Recognised verbs: `ACT-USER`, `RTRV-TIDMAP`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`,
+`RTRV-SW-VER`, `RTRV-SYS`. The prompt is `>`, not Ciena's `<`.
+
+#### Cisco ONS 15454 (`cisco-ons15454-tl1`)
+
+An ONS 15454 GNE fronts 3 to 8 **ENEs** (End NEs, Cisco's term for the same idea as Ciena's RNEs),
+listed by `RTRV-MAP-NETWORK`. Its records are **positional**, with no `KEY=` anywhere:
+
+```
+< ACT-USER::admin:1::admin;
+< RTRV-MAP-NETWORK:::2;
+
+   TID-000 26-09-12 14:27:10
+M  2 COMPLD
+   "172.20.222.225,TID-000,15454"
+   "172.20.222.224,TID-417,15454"
+   "172.20.222.223,TID-092,15454"
+   ...
+   "172.20.222.219,TID-338,UNKNOWN"
+;
+```
+
+`"<IPADDR>,<NODENAME>,<PRODUCT>"`. `NODENAME` is the TID, and `PRODUCT` is the only place any
+vendor hands a client a real model string instead of making it copy the gateway's. The vendor
+documentation notes `PRODUCT` comes back as `UNKNOWN` for a node running a different software
+version, so every seventh element is emitted that way: a client that stores `UNKNOWN` as a device
+model has a bug, and this is how it gets caught. A GNE with fewer than seven ENEs will not show
+one, so generate a few before you go looking for it.
+
+The gateway lists **itself** as the first record, which the other two vendors do not do.
+
+Recognised verbs: `ACT-USER`, `RTRV-MAP-NETWORK`, `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`,
+`RTRV-SW-VER`. Prompt is `<`.
+
+> **Status.** Unlike Ciena and Infinera, this driver was **not** built from a session capture. It
+> comes from the Cisco ONS SONET TL1 Command Guide R9.1 §21.68 and Oracle's ONS 15454 TL1 reference
+> (Example 3-5). Documented is better than invented, and much weaker than seen on hardware. Treat
+> anything it produces as a starting point until someone runs it against a real node, and correct
+> it from the capture when they do.
+
 #### SSH-layer auth vs in-band TL1 auth
 
 Real 6500 deployments differ in whether the SSH transport itself challenges for a password. Both patterns are supported via the server's `--ssh-auth` flag:
@@ -1314,7 +1426,7 @@ Real 6500 deployments differ in whether the SSH transport itself challenges for 
 | `driver` | per-driver: Cisco requires it, Ciena does not | `<` prompt → `ACT-USER` | **Scenario A** for Ciena, normal auth for Cisco — correct for mixed fleets |
 | `none` | no auth (any/none accepted) | `<` prompt → `ACT-USER` | **Scenario A**: TL1 `ACT-USER` is the only gate |
 
-In a no-auth mode (`none`, or `driver` for a Ciena device) the SSH client connects without a password prompt and lands directly on `<`; `ACT-USER` is the sole authentication. In `password` mode the client authenticates at the SSH layer first, then again in-band via `ACT-USER`. Each driver declares its requirement through `RequiresSSHAuth()` (Cisco IOS `true`, Ciena TL1 `false`), which is what `driver` mode consults.
+In a no-auth mode (`none`, or `driver` for a Ciena device) the SSH client connects without a password prompt and lands directly on `<`; `ACT-USER` is the sole authentication. In `password` mode the client authenticates at the SSH layer first, then again in-band via `ACT-USER`. Each driver declares its requirement through `RequiresSSHAuth()` (Cisco IOS `true`, every TL1 driver `false`), which is what `driver` mode consults. The same applies to the Infinera and Cisco ONS models.
 
 ### Per-device parameterisation
 
@@ -1580,7 +1692,7 @@ sudo modprobe -r nf_conntrack 2>/dev/null || true
 
 **Possible v2 work, prioritised by likely rConfig value:**
 
-- More vendors on the [driver framework](#device-drivers-multi-vendor) (Juniper Junos, Arista EOS, HP/Aruba ProCurve) — each is one driver file plus a generator model entry, following the Ciena 6500 TL1 driver as the template
+- More vendors on the [driver framework](#device-drivers-multi-vendor) (Juniper Junos, Arista EOS, HP/Aruba ProCurve) — each is one driver file plus a generator model entry, following the Ciena, Infinera and Cisco ONS TL1 drivers as the template. Bring a session capture: a driver written from guesswork looks tested and is not
 - Config mutation support (`configure terminal`, `write memory`) for testing rConfig's push workflows
 - SSH public key auth
 - Per-device credential variation (manifest-driven) for credential rotation testing
