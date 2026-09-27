@@ -43,6 +43,14 @@ const (
 	CmdTL1RtrvNeList
 	CmdTL1RtrvTidmap
 	CmdTL1RtrvMapNetwork
+
+	// Junos command labels, appended so earlier iota values are unchanged.
+	CmdJunosSetCli
+	CmdJunosShowConfiguration
+
+	// CmdFile labels every command answered from a --commands-root file,
+	// whatever the driver or command text, so file serving adds one series.
+	CmdFile
 )
 
 // String returns the Go identifier form of the command. Used as a bounded
@@ -95,6 +103,12 @@ func (c Command) String() string {
 		return "CmdTL1RtrvTidmap"
 	case CmdTL1RtrvMapNetwork:
 		return "CmdTL1RtrvMapNetwork"
+	case CmdJunosSetCli:
+		return "CmdJunosSetCli"
+	case CmdJunosShowConfiguration:
+		return "CmdJunosShowConfiguration"
+	case CmdFile:
+		return "file"
 	default:
 		return "CmdUnknown"
 	}

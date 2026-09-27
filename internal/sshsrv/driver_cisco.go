@@ -62,6 +62,13 @@ func (ciscoIOS) Serve(ctx *sessionCtx) {
 			}
 			return
 		}
+		if handled, closed := ctx.serveCommandFile(line); handled {
+			if closed {
+				return
+			}
+			continue
+		}
+
 		cmdStart := time.Now()
 		cmd, canonical := ResolveCommand(line)
 

@@ -1,0 +1,19 @@
+Ethernet1 is up, line protocol is up (connected)
+  Hardware is Ethernet, address is 5254.00aa.0111 (bia 5254.00aa.0111)
+  Description: to dist-01 ge-0/0/0
+  Ethernet MTU 9214 bytes, BW 1000000 kbit
+  Full-duplex, 1Gb/s, auto negotiation: off, uni-link: n/a
+Ethernet2 is up, line protocol is up (connected)
+  Hardware is Ethernet, address is 5254.00aa.0112 (bia 5254.00aa.0112)
+  Description: to access-01 Gi0/1
+  Ethernet MTU 9214 bytes, BW 1000000 kbit
+  Full-duplex, 1Gb/s, auto negotiation: off, uni-link: n/a
+Ethernet3 is down, line protocol is down (notconnect)
+  Hardware is Ethernet, address is 5254.00aa.0113 (bia 5254.00aa.0113)
+  Ethernet MTU 9214 bytes, BW 1000000 kbit
+  Full-duplex, 1Gb/s, auto negotiation: off, uni-link: n/a
+Management1 is up, line protocol is up (connected)
+  Hardware is Ethernet, address is 5254.00aa.0101 (bia 5254.00aa.0101)
+  Description: oob management
+  Internet address is 10.20.0.1/24
+  Ethernet MTU 1500 bytes, BW 1000000 kbit

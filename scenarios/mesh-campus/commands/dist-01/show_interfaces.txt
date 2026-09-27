@@ -1,0 +1,16 @@
+Physical interface: ge-0/0/0, Enabled, Physical link is Up
+  Interface index: 148, SNMP ifIndex: 526
+  Description: to core-01 Ethernet1
+  Link-level type: Ethernet, MTU: 1514, Speed: 1000mbps, BPDU Error: None
+  Current address: 2c:6b:f5:aa:02:10, Hardware address: 2c:6b:f5:aa:02:10
+
+Physical interface: ge-0/0/1, Enabled, Physical link is Down
+  Interface index: 149, SNMP ifIndex: 527
+  Link-level type: Ethernet, MTU: 1514, Speed: 1000mbps, BPDU Error: None
+  Current address: 2c:6b:f5:aa:02:11, Hardware address: 2c:6b:f5:aa:02:11
+
+Physical interface: fxp0, Enabled, Physical link is Up
+  Interface index: 64, SNMP ifIndex: 1
+  Description: oob management
+  Link-level type: Ethernet, MTU: 1514, Speed: 1000mbps
+  Current address: 2c:6b:f5:aa:02:01, Hardware address: 2c:6b:f5:aa:02:01
