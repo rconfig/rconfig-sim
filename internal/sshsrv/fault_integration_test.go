@@ -28,7 +28,7 @@ import (
 func withServer(t *testing.T, faults *fault.Set, delayMinMS, delayMaxMS, devices int) (*sshsrv.Server, int, string) {
 	t.Helper()
 	tmp := t.TempDir()
-	sshPort := freePort(t)
+	sshPort := freePorts(t, devices)
 	metricsPort := freePort(t)
 
 	manifest := filepath.Join(tmp, "manifest.csv")
@@ -92,16 +92,31 @@ func TestFault_DisconnectMid_HardCloses(t *testing.T) {
 	faults, _ := fault.NewSet("disconnect_mid", 1.0)
 	srv, port, _ := withServer(t, faults, 0, 0, 1)
 
-	received, err := driveAndCollect(port, "admin", "admin", []string{"terminal length 0", "show running-config"}, 3*time.Second)
-	if err == nil {
-		// Some SSH client paths surface "unexpected EOF" not as a Go error but
-		// as a short read — both are acceptable behaviours. What matters is
-		// that the server truncated the stream.
-		t.Logf("client returned without error (truncated stream read cleanly); bytes=%d", len(received))
-	} else if !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "reset") && !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("want EOF/reset/closed, got %v", err)
-	} else {
-		t.Logf("client disconnect error (expected): %v; bytes=%d", err, len(received))
+	// The fault writes a 20-40% prefix and then closes with SO_LINGER=0, which discards
+	// whatever the kernel has not yet sent. So a session can legitimately lose the whole
+	// prefix; that is the fault working, not failing. Every session must be truncated, and
+	// at least one of a few must show a prefix to prove the prefix is written at all.
+	const attempts = 5
+	var received []byte
+	for i := 0; i < attempts; i++ {
+		got, err := driveAndCollect(port, "admin", "admin", []string{"terminal length 0", "show running-config"}, 3*time.Second)
+		if err == nil {
+			// Some SSH client paths surface "unexpected EOF" not as a Go error but
+			// as a short read — both are acceptable behaviours. What matters is
+			// that the server truncated the stream.
+			t.Logf("attempt %d: client returned without error (truncated stream read cleanly); bytes=%d", i+1, len(got))
+		} else if !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "reset") && !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("want EOF/reset/closed, got %v", err)
+		} else {
+			t.Logf("attempt %d: client disconnect error (expected): %v; bytes=%d", i+1, err, len(got))
+		}
+		if bytes.Contains(got, []byte("\nend\n")) || bytes.Contains(got, []byte("\nend\r\n")) {
+			t.Fatalf("attempt %d: stream was NOT truncated — contains the final 'end' line", i+1)
+		}
+		if bytes.Contains(got, []byte("Building configuration")) {
+			received = got
+			break
+		}
 	}
 
 	time.Sleep(200 * time.Millisecond)
@@ -113,14 +128,9 @@ func TestFault_DisconnectMid_HardCloses(t *testing.T) {
 		t.Errorf("sessions_total{disconnect}: want >=1, got %v", v)
 	}
 
-	// 20-40% window: confirm we got SOME bytes but the full config did not
-	// arrive. The small-bucket template is ~25 KB; a 20% truncation still
-	// leaves >=1000 bytes typically. The "end" terminator line must be absent.
-	if !bytes.Contains(received, []byte("Building configuration")) {
-		t.Errorf("expected some prefix of the config (Building configuration), got %d bytes", len(received))
-	}
-	if bytes.Contains(received, []byte("\nend\n")) || bytes.Contains(received, []byte("\nend\r\n")) {
-		t.Errorf("stream was NOT truncated — contains the final 'end' line")
+	// 20-40% window: some session must have received a prefix of the config.
+	if received == nil {
+		t.Errorf("no prefix of the config (Building configuration) in %d attempts", attempts)
 	}
 }
 
