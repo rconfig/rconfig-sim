@@ -42,6 +42,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 - [Fault injection](#fault-injection)
 - [Metrics reference](#metrics-reference)
 - [Configuration templates](#configuration-templates)
+- [Command files](#command-files)
 - [CLI reference](#cli-reference)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -62,7 +63,8 @@ This README is the at-a-glance overview; the docs site goes deeper. Some good en
 
 - [Quickstart](https://simdocs.rconfig.com/getting-started/quickstart/)
 - [Installation](https://simdocs.rconfig.com/installation/prerequisites/)
-- [Drivers & vendors](https://simdocs.rconfig.com/drivers/overview/) (Cisco IOS · Ciena TL1)
+- [Drivers & vendors](https://simdocs.rconfig.com/drivers/overview/) (Cisco IOS · Arista EOS · Juniper Junos · Ciena, Infinera and Cisco ONS TL1)
+- [Command files](https://simdocs.rconfig.com/running-server/command-files/) and the [mesh-campus scenario](https://simdocs.rconfig.com/examples/mesh-campus/)
 - [CLI reference](https://simdocs.rconfig.com/reference/cli/)
 - [Using rcfg-sim with rConfig](https://simdocs.rconfig.com/examples/using-with-rconfig/)
 
@@ -75,9 +77,9 @@ CLI, metrics, or drivers belong in *this* repo.)
 
 ## What this is and isn't
 
-**It is:** a purpose-built Go SSH server that emulates network devices well enough to satisfy rConfig's standard collection flow — Cisco IOS by default, with a pluggable per-device driver framework that also ships a Ciena 6500 TL1 personality. It is designed to run at extreme density — tens of thousands of listeners on a single host — with bounded memory, zero-copy config delivery, and realistic timing characteristics. It emits Prometheus metrics covering session lifecycle, throughput, and fault activity. It supports deliberate fault injection to exercise rConfig's error handling paths.
+**It is:** a purpose-built Go SSH server that emulates network devices well enough to satisfy rConfig's standard collection flow — Cisco IOS by default, with a pluggable per-device driver framework that also ships Juniper Junos and three optical TL1 personalities (Ciena 6500, Infinera DTN-X, Cisco ONS 15454). Arista EOS runs on the Cisco IOS driver. It is designed to run at extreme density — tens of thousands of listeners on a single host — with bounded memory, zero-copy config delivery, and realistic timing characteristics. It emits Prometheus metrics covering session lifecycle, throughput, and fault activity. It supports deliberate fault injection to exercise rConfig's error handling paths.
 
-**It isn't:** a full Cisco IOS emulator, a network topology simulator (no routing, no data plane, no control plane), or a replacement for GNS3/EVE-NG/Containerlab. It doesn't do SSH key auth, VRF separation, or anything past the ten-or-so commands rConfig-sim actually issues. The point is to load-test an NMS, not to run virtual labs.
+**It isn't:** a full Cisco IOS emulator, a network topology simulator (no routing, no data plane, no control plane), or a replacement for GNS3/EVE-NG/Containerlab. It doesn't do SSH key auth, VRF separation, or anything past the ten-or-so commands each driver answers, except output you supply per device through [command files](#command-files). The point is to load-test an NMS, not to run virtual labs.
 
 If you need to validate rConfig's behaviour against 50,000 devices without spending $2M on real hardware or burning a datacentre on VM emulation, this is the tool.
 
@@ -102,13 +104,14 @@ You cannot answer any of these with unit tests or a lab of ten devices. You need
 - **50,000+ concurrent SSH listeners** on a single commodity host (12 vCPU / 48 GB reference spec)
 - **Real SSH** via `golang.org/x/crypto/ssh` — not a mock, not a protocol approximation
 - **Zero-copy config delivery** via mmap — responding with a 5 MB config allocates nothing on the hot path
-- **Realistic Cisco IOS output** across four size buckets (30 KB to 5 MB) with parameterised hostnames, ACLs, interfaces, routing, and AAA stanzas
+- **Realistic Cisco IOS output** across nine size buckets (`sm` ~25 KB to `6xl` ~100 MB) with parameterised hostnames, ACLs, interfaces, routing, and AAA stanzas
 - **Deterministic generation** — same seed produces byte-identical configs, reproducible across runs
 - **Prometheus metrics** with bounded label cardinality (verified by test)
 - **Fault injection** — four independent fault types (auth_fail, disconnect_mid, slow_response, malformed) with per-session RNG and verified zero overhead when disabled
 - **Systemd-native operation** — one service instance per IP, independent restart, drain, and log streams
 - **Cisco-style command parsing** — prefix matching (`sh run` → `show running-config`), ambiguity detection, enable mode, deterministic serial numbers
-- **Pluggable multi-vendor drivers** — per-device personality selected from the manifest; ships Cisco IOS and a Ciena 6500 TL1 model (`<` prompt, in-band `ACT-USER` login, `;`-terminated `RTRV-*` verbs). New vendors are one driver file plus one generator model entry.
+- **Pluggable multi-vendor drivers** — per-device personality selected from the manifest `template` column. Ships `cisco_ios` (also used for Arista EOS), `junos` (Juniper operational mode), and TL1-over-SSH drivers for the Ciena 6500, Infinera DTN-X and Cisco ONS 15454 (in-band `ACT-USER` login, `;`-terminated `RTRV-*` verbs, per-vendor neighbour grammars). New vendors are one driver file plus one generator model entry.
+- **Command files** — `--commands-root` answers any CLI command per device from `DIR/<hostname>/<slug>.txt`, for output the generator does not produce (LLDP/CDP neighbours, interface tables). Off by default; see [Command files](#command-files) and the multi-vendor [mesh-campus scenario](scenarios/mesh-campus/).
 - **Fully static binaries** — `CGO_ENABLED=0`, no runtime dependencies beyond glibc 2.34
 - **36 runnable manual test samples** covering every feature path
 
@@ -234,6 +237,9 @@ What each driver **owns**:
 | `ciena_tl1` | Ciena | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-NE-LIST`, `RTRV-NODES`, `RTRV-*` |
 | `infinera_tl1` | Infinera | `>` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-TIDMAP`, `RTRV-*` |
 | `cisco_ons_tl1` | Cisco | `<` | in-band `ACT-USER` (SSH auth optional) | `ACT-USER`, `RTRV-MAP-NETWORK`, `RTRV-*` |
+| `junos` | Juniper | `user@host> ` | password (no enable mode) | `show configuration`, `set cli screen-length/width`, `exit`; see [`junos` driver](#junos-driver) |
+
+Arista EOS has no driver of its own: its CLI is IOS-shaped, so an EOS device runs on `cisco_ios`, with EOS-specific output such as `show lldp neighbors detail` supplied through [command files](#command-files). `junos` rows are not produced by the generator; set the `template` column by hand.
 
 The three TL1 drivers share one core (`internal/sshsrv/tl1.go`: block reading, `ACT-USER`
 parsing, response framing) and differ where the hardware differs. That difference is the reason
@@ -1176,7 +1182,7 @@ All metrics exposed at `http://<METRICS_ADDR>/metrics`. Scrape interval 15s reco
 | `rcfgsim_active_sessions` | Gauge | — | Sessions currently open |
 | `rcfgsim_sessions_total` | Counter | `result` | Completed sessions by outcome (ok/auth_fail/disconnect/error) |
 | `rcfgsim_session_duration_seconds` | Histogram | — | Wall time from auth to close, buckets .05s–60s |
-| `rcfgsim_command_duration_seconds` | Histogram | `command` | Per-command dispatch time, labelled by Cmd* enum (never user input) |
+| `rcfgsim_command_duration_seconds` | Histogram | `command` | Per-command dispatch time, labelled by Cmd* enum (never user input); every [command-file](#command-files) response is labelled `file` |
 | `rcfgsim_bytes_sent_total` | Counter | — | Total bytes written to SSH channels |
 | `rcfgsim_auth_attempts_total` | Counter | `result` | Auth attempts by outcome (ok/fail) |
 | `rcfgsim_handshake_duration_seconds` | Histogram | — | SSH handshake wall time, buckets .01s–2.5s |
@@ -1449,6 +1455,53 @@ Same `--seed` produces byte-identical output across runs. Verified by test (SHA2
 
 ---
 
+## Command files
+
+`--commands-root DIR` lets a device answer any CLI command with the contents of a file you provide, for example LLDP/CDP neighbour tables for a topology demo. It is off by default, and with the flag unset every driver behaves exactly as before.
+
+**Layout.** There is one folder per device, named after the manifest `hostname`, and one file per command:
+
+```
+DIR/
+  example-sw-01/
+    show_lldp_neighbors_detail.txt
+    show_cdp_neighbors_detail.txt
+  mx-core-01/
+    show_lldp_neighbors.txt
+```
+
+**Slug rule.** The typed command is trimmed, runs of whitespace are collapsed to one space, the result is lowercased, a trailing `| no-more` is removed, and spaces become `_`. The file name is `<slug>.txt`.
+
+| Typed | File |
+|---|---|
+| `show lldp neighbors detail` | `show_lldp_neighbors_detail.txt` |
+| `Show  CDP neighbors \| no-more` | `show_cdp_neighbors.txt` |
+
+**Behaviour.**
+
+- The file is checked before the driver's built-in commands. If it exists, its contents are sent with CRLF line endings and the usual prompt follows. If it does not exist, the command falls through to the built-in behaviour.
+- **Caching.** A device's folder is listed once, on its first command, and each file is read on its first hit. Both are cached for the life of the process, so restart the instance after adding, removing or editing files. Nothing a client types grows the cache, and a miss costs a map lookup, not a disk read.
+- If the root or a device's folder is missing, the feature is silently off for that device. A folder created later is not seen until restart.
+- The file name must be all lowercase, because the slug always is.
+- Commands containing `/` or `\` are never looked up as files.
+- File-served commands record under a single metric label: `rcfgsim_command_duration_seconds{command="file"}`.
+- This applies to the `cisco_ios` and `junos` drivers. TL1 drivers do not look up files.
+
+A minimal layout is in [scenarios/example/commands/](scenarios/example/commands/). A full multi-vendor scenario (EOS, Junos and IOS with matching LLDP/CDP neighbours) is in [scenarios/mesh-campus/](scenarios/mesh-campus/), with a step-by-step [playbook](scenarios/mesh-campus/PLAYBOOK.md).
+
+### `junos` driver
+
+Set a device's manifest `template` column to `junos` to give it a minimal Juniper Junos operational-mode CLI. The generator does not produce `junos` rows, so edit the manifest by hand.
+
+- The prompt is `<user>@<hostname>> `, using the SSH login name. There is no enable mode.
+- `set cli screen-length 0` and `set cli screen-width 0` are accepted silently.
+- `show configuration` (optionally `| display set` and/or `| no-more`) returns the device's config file, the same way `cisco_ios` serves `show running-config`.
+- `exit` and `quit` close the session. Any other command, unless a command file matches it, prints a caret under the input followed by `unknown command.`
+
+Arista EOS devices use the existing `cisco_ios` driver together with command files; there is no separate EOS driver.
+
+---
+
 ## CLI reference
 
 ### `rcfg-sim-gen`
@@ -1490,6 +1543,7 @@ SSH server. One instance per IP alias.
 --fault-rate float             Per-event fault probability 0.0-1.0 (default 0.0)
 --fault-types string           Enabled fault types, comma-separated (default "")
 --max-concurrent-sessions int  Hard cap on concurrent sessions (default 5000)
+--commands-root string         Per-device command output files, DIR/<hostname>/<slug>.txt (default "" = off)
 --log-level string             error|warn|info|debug (default "info")
 ```
 
@@ -1676,7 +1730,9 @@ sudo modprobe -r nf_conntrack 2>/dev/null || true
 
 - `show startup-config` returns the same bytes as `show running-config` — v1 has no separate startup config concept
 - `show ip interface brief` returns `% Invalid input` — not in rConfig's collection template, removed from dispatch
-- Unknown commands return Cisco's `% Invalid input detected at '^' marker.` — actual position marker is not rendered
+- Unknown commands return Cisco's `% Invalid input detected at '^' marker.` — actual position marker is not rendered. The `junos` driver renders its caret under the first character typed
+- `junos` serves the device's config file verbatim for `show configuration | display set`; it does not convert to set format
+- Command files are cached per device until restart: files added, removed or edited after a device's first command are not seen
 - Enable mode has no privilege 15 vs privilege 7 distinction
 - `write memory`, `copy run start`, and similar mutation commands are not implemented
 
@@ -1692,7 +1748,8 @@ sudo modprobe -r nf_conntrack 2>/dev/null || true
 
 **Possible v2 work, prioritised by likely rConfig value:**
 
-- More vendors on the [driver framework](#device-drivers-multi-vendor) (Juniper Junos, Arista EOS, HP/Aruba ProCurve) — each is one driver file plus a generator model entry, following the Ciena, Infinera and Cisco ONS TL1 drivers as the template. Bring a session capture: a driver written from guesswork looks tested and is not
+- More vendors on the [driver framework](#device-drivers-multi-vendor) (HP/Aruba ProCurve, Nokia SR OS) — each is one driver file plus a generator model entry. Bring a session capture: a driver written from guesswork looks tested and is not
+- Deeper Junos and EOS: generator models that write Junos-syntax configs (so `show configuration | display set` returns set format), and a dedicated EOS driver if IOS-shaped behaviour stops being enough
 - Config mutation support (`configure terminal`, `write memory`) for testing rConfig's push workflows
 - SSH public key auth
 - Per-device credential variation (manifest-driven) for credential rotation testing

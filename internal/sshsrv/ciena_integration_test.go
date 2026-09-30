@@ -211,7 +211,7 @@ func cienaDualHomedFleet(t *testing.T, count int) (portStart int) {
 	tmp := t.TempDir()
 	manifest := filepath.Join(tmp, "manifest.csv")
 	configsDir := filepath.Join(tmp, "configs")
-	sshPort := freePort(t)
+	sshPort := freePorts(t, count)
 
 	if _, err := configs.Run(configs.Config{
 		Count: count, OutputDir: configsDir, ManifestPath: manifest,

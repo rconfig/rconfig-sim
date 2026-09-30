@@ -1,0 +1,39 @@
+Interface Ethernet1 detected 1 LLDP neighbors:
+
+  Neighbor 2c6b.f5aa.0201/"ge-0/0/0", age 12 seconds
+  Discovered 3 days, 2:14:07 ago; Last changed 3 days, 2:14:07 ago
+  - Chassis ID type: MAC address (4)
+    Chassis ID     : 2c6b.f5aa.0201
+  - Port ID type: Interface name (5)
+    Port ID        : "ge-0/0/0"
+  - Time To Live: 120 seconds
+  - Port Description: "to core-01 Ethernet1"
+  - System Name: "dist-01"
+  - System Description: "Juniper Networks, Inc. vmx internet router, kernel JUNOS 22.4R1.10"
+  - System Capabilities : Bridge, Router
+    Enabled Capabilities: Bridge, Router
+  - Management Address Subtype: IPv4 (1)
+    Management Address        : 10.20.0.2
+    Interface Number Subtype  : ifIndex (2)
+    Interface Number          : 1
+
+Interface Ethernet2 detected 1 LLDP neighbors:
+
+  Neighbor 7c95.f3aa.0300/"Gi0/1", age 18 seconds
+  Discovered 3 days, 2:13:51 ago; Last changed 3 days, 2:13:51 ago
+  - Chassis ID type: MAC address (4)
+    Chassis ID     : 7c95.f3aa.0300
+  - Port ID type: Interface name (5)
+    Port ID        : "Gi0/1"
+  - Time To Live: 120 seconds
+  - Port Description: "uplink to core-01 Et2"
+  - System Name: "access-01"
+  - System Description: "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.2(7)E8, RELEASE SOFTWARE (fc1)"
+  - System Capabilities : Bridge, Router
+    Enabled Capabilities: Bridge
+  - Management Address Subtype: IPv4 (1)
+    Management Address        : 10.20.0.3
+    Interface Number Subtype  : ifIndex (2)
+    Interface Number          : 1
+
+Interface Ethernet3 detected 0 LLDP neighbors:

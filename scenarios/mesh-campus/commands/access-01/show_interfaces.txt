@@ -1,0 +1,20 @@
+Vlan1 is up, line protocol is up 
+  Hardware is EtherSVI, address is 7c95.f3aa.0300 (bia 7c95.f3aa.0300)
+  Description: management
+  Internet address is 10.20.0.3/24
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec, 
+GigabitEthernet0/1 is up, line protocol is up (connected) 
+  Hardware is Gigabit Ethernet, address is 7c95.f3aa.0301 (bia 7c95.f3aa.0301)
+  Description: uplink to core-01 Et2
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec, 
+  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX
+GigabitEthernet0/2 is up, line protocol is up (connected) 
+  Hardware is Gigabit Ethernet, address is 7c95.f3aa.0302 (bia 7c95.f3aa.0302)
+  Description: to router1 Gi2
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec, 
+  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX
+GigabitEthernet0/24 is up, line protocol is up (connected) 
+  Hardware is Gigabit Ethernet, address is 7c95.f3aa.0318 (bia 7c95.f3aa.0318)
+  Description: AP lobby
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec, 
+  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX

@@ -33,6 +33,7 @@ func main() {
 	flag.StringVar(&cfg.SSHAuthMode, "ssh-auth", "password", "SSH transport auth: password (all devices) | driver (per-driver: Cisco IOS yes, TL1 drivers no) | none (in-band auth only)")
 	flag.IntVar(&cfg.ResponseDelayMinMS, "response-delay-ms-min", 50, "min per-command response delay (ms)")
 	flag.IntVar(&cfg.ResponseDelayMaxMS, "response-delay-ms-max", 500, "max per-command response delay (ms)")
+	flag.StringVar(&cfg.CommandsRoot, "commands-root", "", "directory of per-device command output files, DIR/<hostname>/<slug>.txt (empty = disabled)")
 	flag.IntVar(&cfg.MaxConcurrentSessions, "max-concurrent-sessions", 5000, "semaphore cap on concurrent sessions")
 
 	flag.Parse()

@@ -22,6 +22,7 @@ type sessionCtx struct {
 	dev            *configs.Device
 	driver         Driver
 	username       string // accepted login username (for in-band auth, e.g. TL1 ACT-USER)
+	loginUser      string // username the client presented at the SSH layer
 	password       string // accepted login password (empty = accept any)
 	enablePassword string
 	delayMinMS     int
@@ -31,7 +32,8 @@ type sessionCtx struct {
 	metrics        *metrics.Registry
 	outcome        *sessionOutcome
 	faults         *fault.Set
-	rawConn        net.Conn // for hard-close (disconnect_mid) fault
+	rawConn        net.Conn  // for hard-close (disconnect_mid) fault
+	cmdFiles       *cmdFiles // --commands-root lookup; nil when the flag is unset
 }
 
 // writeAndCount writes to the channel and increments the bytes_sent counter

@@ -33,14 +33,16 @@ The project follows [Semantic Versioning 2.0.0](https://semver.org/) and [Keep a
 ### Breaking-change surface (assume external users depend on these)
 
 - Model names (the `--distribution` / `size_bucket` keys in the `registry`, [internal/configs/generator.go](internal/configs/generator.go)): the Cisco size labels `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`, `5xl`, `6xl`, plus `ciena-6500-tl1`, `ciena-6500-tl1-gne`, `infinera-dtnx-tl1`, `cisco-ons15454-tl1`
-- Driver/template ids in the manifest `template` column (`cisco_ios`, `ciena_tl1`, `infinera_tl1`, `cisco_ons_tl1`) — the runtime resolves the per-device driver from these (see `driverFor`, [internal/sshsrv/driver.go](internal/sshsrv/driver.go))
+- Driver/template ids in the manifest `template` column (`cisco_ios`, `junos`, `ciena_tl1`, `infinera_tl1`, `cisco_ons_tl1`) — the runtime resolves the per-device driver from these (see `driverFor`, [internal/sshsrv/driver.go](internal/sshsrv/driver.go))
 - `--distribution` string syntax (`model:weight,...`)
 - All CLI flag names and defaults on both binaries
 - Manifest CSV header order
 - Prometheus metric names and label keys (cardinality is asserted by test — don't add new labels casually)
 - Systemd unit name `rcfg-sim@<IP>.service` and the env-file variable names it consumes
 - Default paths: `/etc/rcfg-sim/`, `/opt/rcfg-sim/`, host-key path
-- The set of recognised commands per driver and their abbreviations (Cisco `show ...`; Ciena TL1 `RTRV-*` / `ACT-USER`)
+- The set of recognised commands per driver and their abbreviations (Cisco `show ...`; Junos `show configuration`, `set cli ...`; Ciena TL1 `RTRV-*` / `ACT-USER`)
+- The command-file layout and slug rule behind `--commands-root` (`DIR/<hostname>/<slug>.txt`, see [internal/sshsrv/cmdfiles.go](internal/sshsrv/cmdfiles.go)): changing the slug rule renames every user's files
+- Scenario layouts under `scenarios/` that users copy (`manifest.csv`, `configs/`, `commands/`)
 
 ## Commit style — Conventional Commits
 

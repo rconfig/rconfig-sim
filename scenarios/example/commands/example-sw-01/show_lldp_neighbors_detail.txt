@@ -1,0 +1,2 @@
+Placeholder: LLDP neighbour output for example-sw-01 goes here.
+Replace this file with a real "show lldp neighbors detail" capture.

@@ -1,0 +1,12 @@
+Arista vEOS-lab
+Hardware version:
+Serial number: SN-CORE01
+Hardware MAC address: 5254.00aa.0101
+System MAC address: 5254.00aa.0101
+
+Software image version: 4.31.2F
+Architecture: x86_64
+Internal build version: 4.31.2F-35431812.4312F
+Uptime: 3 days, 2 hours and 20 minutes
+Total memory: 2006424 kB
+Free memory: 1013580 kB

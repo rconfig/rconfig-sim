@@ -6,6 +6,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.5] — 2026-09-27
+
+### Breaking
+
+- **Ciena neighbour discovery now answers `RTRV-NE-LIST` with the real 6500 record shape**
+  (`"SHELF-1::SID=\"X\",NENAME=\"X\",GNE=NO,GNEIPADDR=,INETADDR=...,COST=...,NETYPE=..."`),
+  replacing `RTRV-NBR` and its invented `PROTOCOL=OSC,REACHABLE=YES` payload. The old command
+  and format were not taken from hardware, and no real node answers them. **Breaking** for
+  anything parsing the previous output. The metric label follows the verb:
+  `CmdTL1RtrvNbr` becomes `CmdTL1RtrvNeList`.
+
+- rcfg-sim now **refuses to start** when a manifest names a driver id no driver is registered
+  for, instead of silently serving those devices as Cisco IOS. An empty `template` value still
+  means `cisco_ios`.
+
+#### Migration
+
+```text
+# Ciena neighbour discovery: send the new verb and parse the 6500 record shape
+RTRV-NBR:<tid>:<ctag>;        ->  RTRV-NE-LIST:<tid>:<ctag>;
+PROTOCOL=OSC,REACHABLE=YES    ->  "SHELF-1::SID=\"X\",NENAME=\"X\",GNE=NO,...,NETYPE=..."
+
+# Dashboards and alerts on the command label
+rcfgsim_command_duration_seconds{command="CmdTL1RtrvNbr"}
+  -> rcfgsim_command_duration_seconds{command="CmdTL1RtrvNeList"}
+```
+
+A manifest that now fails with `manifest names unknown driver(s) in the template column: X`
+had a typo'd or unsupported id that was being served as Cisco IOS. Correct the id, or set the
+column to `cisco_ios` (or leave it empty) to keep the old behaviour.
+
 ### Added
 
 - **Infinera DTN-X TL1 (`infinera-dtnx-tl1`)** and **Cisco ONS 15454 TL1 (`cisco-ons15454-tl1`)**
@@ -22,17 +53,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Infinera keeps its own system name in the response header** when relaying for another
   node, so a client cannot verify routing by comparing the header SID to the TID it addressed.
   Pinned by test, because it is easy to mistake for a bug and "fix".
-- rcfg-sim now **refuses to start** when a manifest names a driver id no driver is registered
-  for, instead of silently serving those devices as Cisco IOS.
+- **Command files (`--commands-root DIR`)** — a device answers any CLI command with the
+  contents of `DIR/<hostname>/<slug>.txt`, where the slug is the command lowercased, whitespace
+  collapsed, a trailing `| no-more` removed and spaces turned into `_`. The file is checked before
+  the driver's built-in commands, sent with CRLF line endings, and followed by the usual prompt; a
+  missing file falls through to existing behaviour. A device's folder is listed once and each file
+  read on first hit, both cached until restart. Applies to `cisco_ios` and `junos`. Off by default,
+  and output is byte-identical with the flag unset.
+- **`junos` driver** — a minimal Juniper Junos operational-mode CLI: `<user>@<hostname>> ` prompt,
+  no enable mode, silent `set cli screen-length` / `screen-width`, `show configuration` (with
+  optional `| display set` / `| no-more`) served from the device's config file, and the Junos
+  caret-plus-`unknown command.` error. Selected by `junos` in the manifest `template` column; the
+  generator does not produce `junos` rows. Arista EOS runs on `cisco_ios` with command files and
+  has no driver of its own.
+- **`file` command metric label** — every command-file response is recorded as
+  `rcfgsim_command_duration_seconds{command="file"}`, one series however many commands are
+  file-backed. Pre-registered only when `--commands-root` is set. The `junos` driver adds
+  `CmdJunosSetCli` and `CmdJunosShowConfiguration`.
+- **`scenarios/mesh-campus/`** — a three-device multi-vendor campus (Arista EOS core, Juniper vMX
+  distribution, Cisco C2960X access) with LLDP/CDP neighbour and interface output that agrees end
+  to end, for testing topology discovery such as rConfig Mesh. Includes a manifest, configs,
+  command files and a [playbook](scenarios/mesh-campus/PLAYBOOK.md), and is exercised by the
+  `TestMeshCampus_CommandFiles` integration test.
 
 ### Changed
-
-- **Ciena neighbour discovery now answers `RTRV-NE-LIST` with the real 6500 record shape**
-  (`"SHELF-1::SID=\"X\",NENAME=\"X\",GNE=NO,GNEIPADDR=,INETADDR=...,COST=...,NETYPE=..."`),
-  replacing `RTRV-NBR` and its invented `PROTOCOL=OSC,REACHABLE=YES` payload. The old command
-  and format were not taken from hardware, and no real node answers them. **Breaking** for
-  anything parsing the previous output. The metric label follows the verb:
-  `CmdTL1RtrvNbr` becomes `CmdTL1RtrvNeList`.
 
 - **Dual-homed RNEs (`--rne-dual-home-pct`)** — that percentage of each GNE's remote NEs is
   drawn from a fleet-wide shared pool instead of a private one, so the same RNE is reachable
@@ -49,6 +93,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- **Integration tests no longer fail intermittently with `bind: address already in use`.**
+  The `freePort` helper bound port 0, closed the listener, and let the server bind the port
+  later; port 0 comes from the kernel's ephemeral range, so in that gap the suite's own outgoing
+  SSH and HTTP connections could take it as a source port. Multi-device servers also bound
+  `port+1`… unchecked. Test ports now come from below the ephemeral range (20000–32000), as
+  contiguous blocks that are checked before use and handed out in increasing order.
+- **`TestFault_DisconnectMid_HardCloses` no longer fails about one run in twenty.** The fault
+  closes with `SO_LINGER=0`, which discards unsent bytes, so a session can lose the whole config
+  prefix; the test required every session to show one. It now requires every session to be
+  truncated and at least one of up to five to show a prefix. Fault behaviour is unchanged.
 - **TL1 `ACT-USER` now accepts a quoted password** — a real 6500 requires a complex password to be
   wrapped in double quotes, which rConfig now always sends; the parser compared the literal `"pw"`
   against the configured password and denied every login, and truncated a password containing `:`.
@@ -180,7 +234,8 @@ Initial public release. High-density Cisco IOS SSH simulator for load testing [r
 
 See [README § Known limitations](README.md#known-limitations) for the full list.
 
-[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.5
 [0.0.4]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.4
 [0.0.3]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.3
 [0.0.2]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.2

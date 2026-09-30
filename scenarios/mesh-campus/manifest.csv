@@ -1,0 +1,4 @@
+hostname,ip,port,vendor,template,username,password,enable_password,config_file,size_bucket
+core-01,10.1.1.2,12700,Arista,cisco_ios,admin,,,/var/www/html/rconfig-sim/scenarios/mesh-campus/configs/core-01.cfg,sm
+dist-01,10.1.1.2,12701,Juniper,junos,admin,,,/var/www/html/rconfig-sim/scenarios/mesh-campus/configs/dist-01.cfg,sm
+access-01,10.1.1.2,12702,Cisco,cisco_ios,admin,,,/var/www/html/rconfig-sim/scenarios/mesh-campus/configs/access-01.cfg,sm

@@ -5,11 +5,13 @@ package sshsrv_test
 import (
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,7 +47,7 @@ func TestMetrics_EndToEnd(t *testing.T) {
 		Password:       "admin",
 		EnablePassword: "enable123",
 	}
-	sshPort := freePort(t)
+	sshPort := freePorts(t, 3)
 	metricsPort := freePort(t)
 	genCfg.PortStart = sshPort
 
@@ -150,7 +152,7 @@ func TestMetrics_Cardinality(t *testing.T) {
 	tmp := t.TempDir()
 	manifest := filepath.Join(tmp, "manifest.csv")
 	configsDir := filepath.Join(tmp, "configs")
-	sshPort := freePort(t)
+	sshPort := freePorts(t, 3)
 	metricsPort := freePort(t)
 
 	if _, err := configs.Run(configs.Config{
@@ -290,14 +292,72 @@ func scrape(t *testing.T, port int) string {
 	return string(b)
 }
 
+// Test ports come from below the kernel's ephemeral range (Linux default 32768-60999).
+//
+// The previous helper bound 127.0.0.1:0, closed the listener and returned the port for the
+// server to bind later. Port 0 draws from the ephemeral range, so in that gap any outgoing
+// socket - including this suite's own SSH dials and metrics scrapes - could take the port as
+// its source port, and the server's bind then failed with EADDRINUSE. Multi-device servers
+// also bind port+1.. port+n-1, which were never checked at all. Outgoing sockets never use
+// ports outside the ephemeral range, so a port handed out here stays free until the server
+// binds it.
+const (
+	testPortMin = 20000
+	testPortMax = 32000
+)
+
+var (
+	testPortMu   sync.Mutex
+	testPortNext int
+)
+
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("free port: %v", err)
+	return freePorts(t, 1)
+}
+
+// freePorts returns the first of n consecutive ports, each checked bindable on 127.0.0.1.
+// Ports are handed out in increasing order within a process, starting at a random offset so
+// concurrent test processes are unlikely to meet.
+func freePorts(t *testing.T, n int) int {
+	t.Helper()
+	testPortMu.Lock()
+	defer testPortMu.Unlock()
+
+	if testPortNext == 0 {
+		testPortNext = testPortMin + rand.Intn(testPortMax-testPortMin)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+
+	for attempt := 0; attempt < 1000; attempt++ {
+		if testPortNext+n > testPortMax {
+			testPortNext = testPortMin
+		}
+		base := testPortNext
+		testPortNext += n
+
+		if portsBindable(base, n) {
+			return base
+		}
+	}
+	t.Fatalf("no %d consecutive free ports in %d-%d", n, testPortMin, testPortMax)
+	return 0
+}
+
+func portsBindable(base, n int) bool {
+	var held []net.Listener
+	defer func() {
+		for _, l := range held {
+			_ = l.Close()
+		}
+	}()
+	for p := base; p < base+n; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			return false
+		}
+		held = append(held, l)
+	}
+	return true
 }
 
 func histogramSampleCount(t *testing.T, g interface {

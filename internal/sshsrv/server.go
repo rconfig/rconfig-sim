@@ -47,8 +47,11 @@ type Config struct {
 	ResponseDelayMaxMS    int
 	MaxConcurrentSessions int
 	MetricsAddr           string
-	Faults                *fault.Set
-	Logger                *slog.Logger
+	// CommandsRoot, when set, serves <root>/<hostname>/<slug>.txt as the
+	// output of the matching command. Empty disables the feature.
+	CommandsRoot string
+	Faults       *fault.Set
+	Logger       *slog.Logger
 }
 
 // Server owns the TCP listeners, SSH handshake machinery, loaded devices,
@@ -69,6 +72,7 @@ type Server struct {
 
 	metrics     *metrics.Registry
 	metricsHTTP *http.Server
+	cmdFiles    *cmdFiles
 }
 
 // New loads host key + device configs and prepares the Server, but does NOT
@@ -127,12 +131,16 @@ func New(cfg Config) (*Server, error) {
 		cancel:   cancel,
 		totalMap: total,
 		metrics:  metrics.New(),
+		cmdFiles: newCmdFiles(cfg.CommandsRoot),
 	}
 	// Pre-register the command_duration label values every registered driver can
 	// emit, so vendor-specific values (e.g. TL1) appear in /metrics at zero from
 	// the first scrape — the same guarantee metrics.KnownCommands gives Cisco.
 	for _, cmd := range registeredCommands() {
 		srv.metrics.CommandDuration.WithLabelValues(cmd)
+	}
+	if srv.cmdFiles != nil {
+		srv.metrics.CommandDuration.WithLabelValues(CmdFile.String())
 	}
 	return srv, nil
 }
@@ -365,7 +373,7 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 			outcome.Set("error")
 			continue
 		}
-		go s.handleSession(ch, reqs, dev, outcome, conn, rng)
+		go s.handleSession(ch, reqs, dev, sshConn.User(), outcome, conn, rng)
 	}
 }
 
@@ -423,13 +431,14 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *configs.Device, outcome *sessionOutcome, rawConn net.Conn, rng *mrand.Rand) {
+func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *configs.Device, loginUser string, outcome *sessionOutcome, rawConn net.Conn, rng *mrand.Rand) {
 	shellStarted := false
 	ctx := &sessionCtx{
 		ch:             ch,
 		dev:            dev,
 		driver:         driverFor(dev.Driver),
 		username:       s.cfg.Username,
+		loginUser:      loginUser,
 		password:       s.cfg.Password,
 		enablePassword: s.cfg.EnablePassword,
 		delayMinMS:     s.cfg.ResponseDelayMinMS,
@@ -440,6 +449,7 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *co
 		outcome:        outcome,
 		faults:         s.cfg.Faults,
 		rawConn:        rawConn,
+		cmdFiles:       s.cmdFiles,
 	}
 	for req := range reqs {
 		switch req.Type {

@@ -1,0 +1,43 @@
+------------------------------------------------
+Local Intf: Gi0/1
+Chassis id: 5254.00aa.0101
+Port id: Et2
+Port Description: to access-01 Gi0/1
+System Name: core-01
+
+System Description: 
+Arista Networks EOS version 4.31.2F running on an Arista Networks vEOS-lab
+
+Time remaining: 101 seconds
+System Capabilities: B,R
+Enabled Capabilities: B,R
+Management Addresses:
+    IP: 10.20.0.1
+Auto Negotiation - not supported
+Physical media capabilities - not advertised
+Media Attachment Unit type - not advertised
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi0/24
+Chassis id: 00a2.eeb1.5c10
+Port id: 00a2.eeb1.5c10
+Port Description: eth0
+System Name: ap-lobby-01
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 17.9.4.27
+
+Time remaining: 95 seconds
+System Capabilities: B,T
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.20.10.50
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+
+Total entries displayed: 2
