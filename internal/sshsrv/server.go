@@ -57,7 +57,10 @@ type Config struct {
 	// A device's manifest `profile` column overrides both.
 	DeviceProfiles []profile.Rule
 	ProfileSeed    int64
-	Logger         *slog.Logger
+	// MaxSessionDuration caps a session's life (--max-session). Zero means
+	// the 5-minute default. A hang profile extends it by the hang.
+	MaxSessionDuration time.Duration
+	Logger             *slog.Logger
 }
 
 // Server owns the TCP listeners, SSH handshake machinery, loaded devices,
@@ -438,8 +441,12 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 	defer s.metrics.ActiveSessions.Dec()
 
 	// Cap on a session's life. A hang profile extends it by the hang, or the
-	// cap would cut every hang longer than 5 minutes short.
-	hardTimer := time.AfterFunc(5*time.Minute+prof.HangDuration(), func() { _ = sshConn.Close() })
+	// cap would cut every hang longer than the cap short.
+	maxSession := s.cfg.MaxSessionDuration
+	if maxSession <= 0 {
+		maxSession = 5 * time.Minute
+	}
+	hardTimer := time.AfterFunc(maxSession+prof.HangDuration(), func() { _ = sshConn.Close() })
 	defer hardTimer.Stop()
 
 	connDone := make(chan struct{})

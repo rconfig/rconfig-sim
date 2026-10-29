@@ -16,6 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   hostnames.
 - Optional 11th manifest column `profile`, pinning one device to one profile. Manifests
   without it load unchanged.
+- `--max-session` (default `5m`) sets how long a session may last before the simulator
+  closes it. Raise it for `latency` devices whose sessions run past 5 minutes, or the
+  simulator, not the client under test, ends them. A `hang` device still adds its hang.
 
 ### Changed
 

@@ -1196,6 +1196,7 @@ The manifest takes an optional 11th column, `profile`, holding one profile witho
 ### Notes
 
 - A hang longer than the 5-minute session cap extends the cap by the hang, so a 2-hour hang is not cut at 5 minutes.
+- Every other session keeps the cap, including slow `latency` devices. When a slow device's whole session runs past 5 minutes, raise the cap with `--max-session 15m`, or the simulator ends the session itself.
 - A hang ends early when the client disconnects or the simulator shuts down.
 - `refuse` sessions count as `rcfgsim_sessions_total{result="error"}`. `disconnect` sessions count as `{result="disconnect"}` and under `rcfgsim_faults_injected_total{type="disconnect_mid"}`. Hung sessions show in `rcfgsim_session_duration_seconds`.
 - Profiles work for every driver: Cisco IOS, Junos and the TL1 personalities.
@@ -1576,6 +1577,7 @@ SSH server. One instance per IP alias.
 --device-profiles string       Per-device behaviour for a share of the fleet, profile@percent,... (default "" = off)
 --profile-seed int             Seed deciding which devices --device-profiles picks (default 42)
 --max-concurrent-sessions int  Hard cap on concurrent sessions (default 5000)
+--max-session duration         Longest a session may last before it is closed; a hang profile adds its hang (default 5m)
 --commands-root string         Per-device command output files, DIR/<hostname>/<slug>.txt (default "" = off)
 --log-level string             error|warn|info|debug (default "info")
 ```

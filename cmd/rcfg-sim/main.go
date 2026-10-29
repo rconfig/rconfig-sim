@@ -38,6 +38,7 @@ func main() {
 	flag.StringVar(&cfg.CommandsRoot, "commands-root", "", "directory of per-device command output files, DIR/<hostname>/<slug>.txt (empty = disabled)")
 	flag.Int64Var(&cfg.ProfileSeed, "profile-seed", 42, "seed deciding which devices --device-profiles picks; same seed, same devices")
 	flag.IntVar(&cfg.MaxConcurrentSessions, "max-concurrent-sessions", 5000, "semaphore cap on concurrent sessions")
+	flag.DurationVar(&cfg.MaxSessionDuration, "max-session", 5*time.Minute, "longest a session may last before the simulator closes it; a hang profile adds its hang")
 
 	flag.Parse()
 

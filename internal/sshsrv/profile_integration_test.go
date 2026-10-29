@@ -25,6 +25,13 @@ import (
 // manifestProfiles[i] for device i. Returns the server and its first SSH port.
 func withProfiledServer(t *testing.T, spec string, devices int, manifestProfiles []string) (*sshsrv.Server, int) {
 	t.Helper()
+	return withProfiledServerCap(t, spec, devices, manifestProfiles, 0)
+}
+
+// withProfiledServerCap is withProfiledServer with --max-session set to maxSession
+// (zero keeps the default).
+func withProfiledServerCap(t *testing.T, spec string, devices int, manifestProfiles []string, maxSession time.Duration) (*sshsrv.Server, int) {
+	t.Helper()
 	tmp := t.TempDir()
 	sshPort := freePorts(t, devices)
 	metricsPort := freePort(t)
@@ -54,6 +61,7 @@ func withProfiledServer(t *testing.T, spec string, devices int, manifestProfiles
 		MetricsAddr:           fmt.Sprintf("127.0.0.1:%d", metricsPort),
 		DeviceProfiles:        rules,
 		ProfileSeed:           42,
+		MaxSessionDuration:    maxSession,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -210,5 +218,54 @@ func TestProfile_BadManifestProfileRefusesToStart(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "hang:forever") {
 		t.Fatalf("want a startup error naming the bad profile, got %v", err)
+	}
+}
+
+// openSession logs in and starts a shell, returning a channel that closes when
+// the simulator ends the connection.
+func openSession(t *testing.T, port int) <-chan struct{} {
+	t.Helper()
+	c, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port), &ssh.ClientConfig{
+		User: "admin", Auth: []ssh.AuthMethod{ssh.Password("admin")},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	_ = sess.RequestPty("xterm", 200, 50, ssh.TerminalModes{})
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	closed := make(chan struct{})
+	go func() { _ = c.Wait(); close(closed) }()
+	return closed
+}
+
+func TestMaxSession_ClosesSessionAtTheCap(t *testing.T) {
+	_, port := withProfiledServerCap(t, "", 1, nil, time.Second)
+
+	start := time.Now()
+	select {
+	case <-openSession(t, port):
+		if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
+			t.Fatalf("session closed after %v, before the 1s cap", elapsed)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("session still open 4s after a 1s cap")
+	}
+}
+
+func TestMaxSession_LongerCapKeepsSlowSessionOpen(t *testing.T) {
+	_, port := withProfiledServerCap(t, "latency:300ms@100%", 1, nil, 3*time.Second)
+
+	select {
+	case <-openSession(t, port):
+		t.Fatal("session closed before its 3s cap")
+	case <-time.After(1500 * time.Millisecond):
 	}
 }
