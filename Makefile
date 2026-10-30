@@ -1,6 +1,7 @@
 BIN_DIR       := bin
 GOFLAGS       := -trimpath
-LDFLAGS       := -s -w
+VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS       := -s -w -X main.version=$(VERSION)
 BUILD_ENV     := CGO_ENABLED=0
 
 # Install targets (override on command line for unit tests or staging).

@@ -14,6 +14,35 @@ Type=simple
 User=rcfgsim
 Group=rcfgsim
 
+# Defaults for every variable ExecStart uses, matching the rcfg-sim flag
+# defaults (LISTEN_IP defaults to the instance name). The env file below
+# overrides any of them, so an env file only needs the values it changes and
+# older env files without the newer variables keep working.
+Environment=LISTEN_IP=%i
+Environment=PORT_START=10000
+Environment=PORT_COUNT=2500
+Environment=MANIFEST=/opt/rcfg-sim/manifest.csv
+Environment=HOST_KEY=/etc/rcfg-sim/ssh_host_rsa_key
+Environment=USERNAME=admin
+Environment=PASSWORD=admin
+Environment=ENABLE_PASSWORD=enable123
+Environment=SSH_AUTH=password
+Environment=METRICS_ADDR=0.0.0.0:9100
+Environment=RESPONSE_DELAY_MS_MIN=50
+Environment=RESPONSE_DELAY_MS_MAX=500
+Environment=MAX_CONCURRENT_SESSIONS=5000
+Environment=MAX_SESSION=5m
+Environment=ACTIVE_DEVICES=all
+Environment=COMMANDS_ROOT=
+Environment=FAULT_RATE=0.0
+Environment=FAULT_TYPES=
+Environment=FAULT_RATES=
+Environment=DEVICE_PROFILES=
+Environment=PROFILE_SEED=42
+Environment=LOG_LEVEL=info
+Environment=ADMIN=false
+Environment=ADMIN_TOKEN=
+
 # Per-instance config: /etc/rcfg-sim/10.50.0.1.env supplies LISTEN_IP,
 # PORT_START, etc. See /opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample.
 EnvironmentFile=/etc/rcfg-sim/%i.env
@@ -27,12 +56,21 @@ ExecStart=/opt/rcfg-sim/bin/rcfg-sim \
     --username=${USERNAME} \
     --password=${PASSWORD} \
     --enable-password=${ENABLE_PASSWORD} \
+    --ssh-auth=${SSH_AUTH} \
     --metrics-addr=${METRICS_ADDR} \
     --response-delay-ms-min=${RESPONSE_DELAY_MS_MIN} \
     --response-delay-ms-max=${RESPONSE_DELAY_MS_MAX} \
     --max-concurrent-sessions=${MAX_CONCURRENT_SESSIONS} \
+    --max-session=${MAX_SESSION} \
+    --active-devices=${ACTIVE_DEVICES} \
+    --commands-root=${COMMANDS_ROOT} \
     --fault-rate=${FAULT_RATE} \
     --fault-types=${FAULT_TYPES} \
+    --fault-rates=${FAULT_RATES} \
+    --device-profiles=${DEVICE_PROFILES} \
+    --profile-seed=${PROFILE_SEED} \
+    --admin=${ADMIN} \
+    --admin-token=${ADMIN_TOKEN} \
     --log-level=${LOG_LEVEL}
 
 # rcfg-sim binds PORT_COUNT listeners (default 2500) plus up to MAX_SESSIONS

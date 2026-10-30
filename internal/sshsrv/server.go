@@ -17,17 +17,23 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/rcfg-sim/rcfg-sim/internal/activity"
 	"github.com/rcfg-sim/rcfg-sim/internal/configs"
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 	"github.com/rcfg-sim/rcfg-sim/internal/metrics"
 	"github.com/rcfg-sim/rcfg-sim/internal/profile"
+	"github.com/rcfg-sim/rcfg-sim/internal/runtime"
 )
 
 // Config is everything the Server needs to run. Only fields supplied by the CLI.
+// Faults, DeviceProfiles, ProfileSeed, the response delays,
+// MaxConcurrentSessions and ActiveDevices are only the starting values: the
+// server copies them into a runtime.Live, which may be swapped later.
 type Config struct {
 	ListenIP       string
 	PortStart      int
@@ -57,21 +63,27 @@ type Config struct {
 	// A device's manifest `profile` column overrides both.
 	DeviceProfiles []profile.Rule
 	ProfileSeed    int64
+	// DeviceProfileRules is DeviceProfiles as given, one --device-profiles
+	// item each (e.g. "hang:3600s@3%"). Reported by the admin API only.
+	DeviceProfileRules []string
 	// MaxSessionDuration caps a session's life (--max-session). Zero means
 	// the 5-minute default. A hang profile extends it by the hang.
 	MaxSessionDuration time.Duration
-	Logger             *slog.Logger
+	// ActiveDevices is how many devices, in port order from PortStart, accept
+	// sessions (--active-devices). The rest drop connections like the refuse
+	// profile. Nil means every device.
+	ActiveDevices *int
+	Logger        *slog.Logger
 }
 
 // Server owns the TCP listeners, SSH handshake machinery, loaded devices,
-// and the session-concurrency semaphore. One instance per IP alias.
+// and the live runtime config. One instance per IP alias.
 type Server struct {
 	cfg       Config
 	signer    ssh.Signer
 	devices   map[int]*configs.Device
 	allDevs   []*configs.Device
 	logger    *slog.Logger
-	sem       chan struct{}
 	listeners []net.Listener
 	acceptWG  sync.WaitGroup
 	sessionWG sync.WaitGroup
@@ -82,7 +94,24 @@ type Server struct {
 	metrics     *metrics.Registry
 	metricsHTTP *http.Server
 	cmdFiles    *cmdFiles
-	profiles    map[int]*profile.Profile // by port; absent = normal device
+
+	// runtime holds the swappable session config. Each session loads it
+	// once and keeps that snapshot.
+	runtime *runtime.Holder
+	// sessions counts admitted sessions, checked against Live.MaxSessions.
+	sessions atomic.Int64
+
+	// Activity for the admin API: per-device state and the event stream.
+	devTable  *activity.DeviceTable
+	bus       *activity.Bus
+	startedAt time.Time
+	// mounts are extra handlers for the metrics mux, added by Mount.
+	mounts []mount
+}
+
+type mount struct {
+	pattern string
+	handler http.Handler
 }
 
 // New loads host key + device configs and prepares the Server, but does NOT
@@ -96,6 +125,13 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.PortCount <= 0 {
 		return nil, errors.New("port-count must be > 0")
+	}
+	activeDevices := cfg.PortCount
+	if cfg.ActiveDevices != nil {
+		activeDevices = *cfg.ActiveDevices
+		if activeDevices < 0 || activeDevices > cfg.PortCount {
+			return nil, fmt.Errorf("active-devices %d out of range 0..%d (port-count)", activeDevices, cfg.PortCount)
+		}
 	}
 	switch cfg.SSHAuthMode {
 	case "", "password", "driver", "none":
@@ -141,15 +177,25 @@ func New(cfg Config) (*Server, error) {
 		devices:  devMap,
 		allDevs:  devs,
 		logger:   cfg.Logger,
-		sem:      make(chan struct{}, cfg.MaxConcurrentSessions),
 		ctx:      ctx,
 		cancel:   cancel,
 		totalMap: total,
 		metrics:  metrics.New(),
 		cmdFiles: newCmdFiles(cfg.CommandsRoot),
-		profiles: profiles,
+		runtime: runtime.NewHolder(&runtime.Live{
+			Faults:        cfg.Faults,
+			Profiles:      profiles,
+			DelayMin:      time.Duration(cfg.ResponseDelayMinMS) * time.Millisecond,
+			DelayMax:      time.Duration(cfg.ResponseDelayMaxMS) * time.Millisecond,
+			MaxSessions:   int64(cfg.MaxConcurrentSessions),
+			ActiveDevices: activeDevices,
+			ProfileRules:  cfg.DeviceProfileRules,
+			ProfileSeed:   cfg.ProfileSeed,
+		}),
+		devTable: activity.NewDeviceTable(cfg.PortCount),
+		bus:      activity.NewBus(activity.DefaultRateLimit, activity.DefaultRingSize),
 	}
-	srv.logProfiles(devs)
+	srv.logProfiles(devs, profiles)
 	// Pre-register the command_duration label values every registered driver can
 	// emit, so vendor-specific values (e.g. TL1) appear in /metrics at zero from
 	// the first scrape — the same guarantee metrics.KnownCommands gives Cisco.
@@ -160,6 +206,13 @@ func New(cfg Config) (*Server, error) {
 		srv.metrics.CommandDuration.WithLabelValues(CmdFile.String())
 	}
 	return srv, nil
+}
+
+// ResolveProfiles builds the port-to-profile map for this server's devices
+// from rules and seed, as New does at startup, for a new runtime.Live.
+// Manifest-pinned profiles still win. Runs off the hot path.
+func (s *Server) ResolveProfiles(rules []profile.Rule, seed int64) (map[int]*profile.Profile, error) {
+	return resolveProfiles(s.allDevs, rules, seed)
 }
 
 // resolveProfiles gives each device its behaviour profile: the manifest
@@ -186,14 +239,14 @@ const maxLoggedProfileHosts = 50
 
 // logProfiles logs, per profile, how many devices have it and which ones, so
 // an operator can tell which devices in rConfig should misbehave.
-func (s *Server) logProfiles(devs []*configs.Device) {
-	if len(s.profiles) == 0 {
+func (s *Server) logProfiles(devs []*configs.Device, profiles map[int]*profile.Profile) {
+	if len(profiles) == 0 {
 		return
 	}
 	hosts := map[string][]string{}
 	var order []string
 	for _, d := range devs {
-		p, ok := s.profiles[d.Port]
+		p, ok := profiles[d.Port]
 		if !ok {
 			continue
 		}
@@ -222,11 +275,44 @@ func (s *Server) logProfiles(devs []*configs.Device) {
 // that need to read observed values without scraping the HTTP endpoint.
 func (s *Server) Metrics() *metrics.Registry { return s.metrics }
 
+// Runtime returns the holder of the live session config. Store a new
+// runtime.Live in it to change faults, profiles, delays, the session cap or
+// the active device count; the change applies to new sessions only.
+func (s *Server) Runtime() *runtime.Holder { return s.runtime }
+
+// ActiveSessions returns the number of sessions admitted and not yet ended,
+// the count checked against the session cap.
+func (s *Server) ActiveSessions() int64 { return s.sessions.Load() }
+
+// DeviceCount returns the number of devices loaded from the manifest.
+func (s *Server) DeviceCount() int { return len(s.devices) }
+
+// DeviceTable returns the per-device state table, indexed by port offset.
+func (s *Server) DeviceTable() *activity.DeviceTable { return s.devTable }
+
+// Bus returns the session event bus.
+func (s *Server) Bus() *activity.Bus { return s.bus }
+
+// StartedAt returns when Start was called; zero before that.
+func (s *Server) StartedAt() time.Time { return s.startedAt }
+
+// Done is closed when Shutdown begins. Long-lived handlers (event streams)
+// should end on it so Shutdown is not held up.
+func (s *Server) Done() <-chan struct{} { return s.ctx.Done() }
+
+// Mount adds a handler to the metrics HTTP mux, alongside /metrics and
+// /healthz. Call it before Start; it has no effect after. Does nothing when
+// --metrics-addr is empty.
+func (s *Server) Mount(pattern string, h http.Handler) {
+	s.mounts = append(s.mounts, mount{pattern, h})
+}
+
 // Start binds one listener per port and spawns the per-port accept goroutine.
 // Also starts the metrics HTTP server (serving /metrics and /healthz) on the
 // address supplied via --metrics-addr. Returns the first listen error
 // encountered, after cleaning up any partially bound listeners.
 func (s *Server) Start() error {
+	s.startedAt = time.Now()
 	for port, dev := range s.devices {
 		l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", s.cfg.ListenIP, port))
 		if err != nil {
@@ -268,6 +354,9 @@ func (s *Server) startMetricsHTTP() error {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", s.metrics.Handler())
+	for _, m := range s.mounts {
+		mux.Handle(m.pattern, m.handler)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
@@ -361,30 +450,42 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 	rng := newSessionRand()
 
 	sessionStart := time.Now()
-	outcome := &sessionOutcome{result: "ok"}
+	outcome := &sessionOutcome{result: "ok", start: sessionStart}
+	idx := dev.Port - s.cfg.PortStart
+	var admitted, inactive bool
 	defer func() {
 		s.metrics.SessionDuration.Observe(time.Since(sessionStart).Seconds())
-		s.metrics.SessionsTotal.WithLabelValues(outcome.Get()).Inc()
+		result := outcome.Get()
+		s.metrics.SessionsTotal.WithLabelValues(result).Inc()
+		s.endActivity(dev, idx, admitted, inactive, outcome, result)
 	}()
 
-	prof := s.profiles[dev.Port]
+	// One snapshot of the runtime config for the whole session, so a swap
+	// changes new sessions only and never alters one in flight.
+	live := s.runtime.Load()
+	prof := live.Profiles[dev.Port]
 
-	// refuse profile: the device accepts TCP and drops it before the SSH
-	// handshake, as a box whose SSH daemon is dead or rate limiting.
-	if prof.Is(profile.KindRefuse) {
+	// An inactive device (--active-devices) and the refuse profile both
+	// accept TCP and drop it before the SSH handshake, as a box whose SSH
+	// daemon is dead or rate limiting.
+	inactive = !s.deviceActive(live, dev.Port)
+	if inactive || prof.Is(profile.KindRefuse) {
 		outcome.Set("error")
 		hardCloseTCP(conn)
 		return
 	}
 
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	default:
+	if !s.acquireSession(live) {
 		s.logger.Warn("session cap hit; refusing connection",
 			"port", dev.Port, "remote", conn.RemoteAddr().String())
 		outcome.Set("error")
 		return
+	}
+	defer s.releaseSession()
+	admitted = true
+	s.devTable.Start(idx)
+	if s.bus.Active() {
+		s.bus.Publish(sessionEvent(activity.KindSessionStart, dev, outcome, time.Now()))
 	}
 
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second)) // handshake deadline
@@ -395,8 +496,8 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 			// auth_fail fault fires BEFORE password check so the rejection
 			// is indistinguishable from a real wrong-password case to the
 			// client. Increment both auth_attempts{fail} and faults_injected.
-			if s.cfg.Faults.Roll(rng, fault.TypeAuthFail) {
-				s.metrics.FaultsInjected.WithLabelValues(fault.TypeAuthFail.String()).Inc()
+			if live.Faults.Roll(rng, fault.TypeAuthFail) {
+				noteFault(s.metrics, s.bus, dev, outcome, fault.TypeAuthFail)
 				s.metrics.AuthAttempts.WithLabelValues("fail").Inc()
 				return nil, errors.New("invalid password")
 			}
@@ -465,16 +566,107 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 			outcome.Set("error")
 			continue
 		}
-		go s.handleSession(ch, reqs, dev, sshConn.User(), outcome, conn, rng, prof, connDone)
+		go s.handleSession(ch, reqs, dev, sshConn.User(), outcome, conn, rng, live, prof, connDone)
+	}
+}
+
+// deviceActive reports whether the device on port accepts sessions under
+// live: its index from PortStart must be below ActiveDevices.
+func (s *Server) deviceActive(live *runtime.Live, port int) bool {
+	return port-s.cfg.PortStart < live.ActiveDevices
+}
+
+// acquireSession admits one session against live.MaxSessions. On true the
+// caller must call releaseSession when the session ends.
+func (s *Server) acquireSession(live *runtime.Live) bool {
+	if s.sessions.Add(1) > live.MaxSessions {
+		s.sessions.Add(-1)
+		return false
+	}
+	return true
+}
+
+func (s *Server) releaseSession() { s.sessions.Add(-1) }
+
+// endActivity records a finished connection in the device table and, when
+// anyone is watching, publishes its session_end event. admitted means the
+// session passed admission (and DeviceTable.Start ran); inactive means it
+// was dropped because the device is past --active-devices, which the device
+// table reports from the live count rather than storing.
+func (s *Server) endActivity(dev *configs.Device, idx int, admitted, inactive bool, o *sessionOutcome, result string) {
+	now := time.Now()
+	st := activity.StateForOutcome(result)
+	if o.hung.Load() {
+		st = activity.StateHang
+	}
+	switch {
+	case admitted:
+		s.devTable.End(idx, st, now)
+	case inactive:
+		s.devTable.Touch(idx, now)
+	default:
+		s.devTable.Set(idx, st, now)
+	}
+	if s.bus.Active() {
+		ev := sessionEvent(activity.KindSessionEnd, dev, o, now)
+		ev.Outcome = result
+		ev.Fault = o.lastFault()
+		s.bus.Publish(ev)
+	}
+}
+
+// sessionEvent builds an activity event for dev's session at now. o may be
+// nil (dispatch-only unit tests).
+func sessionEvent(kind string, dev *configs.Device, o *sessionOutcome, now time.Time) activity.Event {
+	ev := activity.Event{T: now.UnixMilli(), Host: dev.Hostname, Port: dev.Port, Kind: kind}
+	if o != nil {
+		ev.Bytes = o.bytes.Load()
+		ev.MS = now.Sub(o.start).Milliseconds()
+	}
+	return ev
+}
+
+// noteFault records an injected fault: the faults_injected metric, the
+// session's last fault, and a fault event when anyone is watching. m, bus
+// and o may be nil.
+func noteFault(m *metrics.Registry, bus *activity.Bus, dev *configs.Device, o *sessionOutcome, t fault.Type) {
+	if m != nil {
+		m.FaultsInjected.WithLabelValues(t.String()).Inc()
+	}
+	if o != nil {
+		o.setFault(t.String())
+	}
+	if bus.Active() && dev != nil {
+		ev := sessionEvent(activity.KindFault, dev, o, time.Now())
+		ev.Fault = t.String()
+		bus.Publish(ev)
 	}
 }
 
 // sessionOutcome tracks the terminal result string for the rcfgsim_sessions_total
-// counter. Shared between handleConn and any session goroutines it spawns.
+// counter, plus what the activity data needs at session end. Shared between
+// handleConn and any session goroutines it spawns.
 // "ok" is the default; any non-"ok" value sticks (first-wins on error paths).
 type sessionOutcome struct {
 	mu     sync.Mutex
 	result string
+	fault  string // last injected fault type, "" if none
+
+	start time.Time    // when the connection was accepted; set once
+	bytes atomic.Int64 // bytes sent on the session's channels
+	hung  atomic.Bool  // a hang profile hung this session
+}
+
+func (o *sessionOutcome) setFault(f string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.fault = f
+}
+
+func (o *sessionOutcome) lastFault() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.fault
 }
 
 func (o *sessionOutcome) Set(r string) {
@@ -523,7 +715,7 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *configs.Device, loginUser string, outcome *sessionOutcome, rawConn net.Conn, rng *mrand.Rand, prof *profile.Profile, connDone <-chan struct{}) {
+func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *configs.Device, loginUser string, outcome *sessionOutcome, rawConn net.Conn, rng *mrand.Rand, live *runtime.Live, prof *profile.Profile, connDone <-chan struct{}) {
 	shellStarted := false
 	ctx := &sessionCtx{
 		ch:             ch,
@@ -533,13 +725,14 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *co
 		loginUser:      loginUser,
 		password:       s.cfg.Password,
 		enablePassword: s.cfg.EnablePassword,
-		delayMinMS:     s.cfg.ResponseDelayMinMS,
-		delayMaxMS:     s.cfg.ResponseDelayMaxMS,
+		delayMinMS:     int(live.DelayMin.Milliseconds()),
+		delayMaxMS:     int(live.DelayMax.Milliseconds()),
 		logger:         s.logger,
 		rng:            rng,
 		metrics:        s.metrics,
 		outcome:        outcome,
-		faults:         s.cfg.Faults,
+		faults:         live.Faults,
+		events:         s.bus,
 		rawConn:        rawConn,
 		cmdFiles:       s.cmdFiles,
 		profile:        prof,

@@ -117,6 +117,9 @@ func registeredCommands() []string {
 func (ctx *sessionCtx) applyResponseDelay() {
 	if ctx.profile.Is(profile.KindHang) && !ctx.hung {
 		ctx.hung = true
+		if ctx.outcome != nil {
+			ctx.outcome.hung.Store(true)
+		}
 		ctx.hang(ctx.profile.Hang)
 	}
 
@@ -140,9 +143,7 @@ func (ctx *sessionCtx) applyResponseDelay() {
 		if delayMS > 60000 {
 			delayMS = 60000
 		}
-		if ctx.metrics != nil {
-			ctx.metrics.FaultsInjected.WithLabelValues(fault.TypeSlowResponse.String()).Inc()
-		}
+		ctx.noteFault(fault.TypeSlowResponse)
 	}
 	if delayMS > 0 {
 		time.Sleep(time.Duration(delayMS) * time.Millisecond)
@@ -194,9 +195,7 @@ func (ctx *sessionCtx) emit(cmd Command, cmdStart time.Time, resp Response) (clo
 			window := 20 + ctx.rng.Intn(21) // 20..40 inclusive
 			n := len(resp.ConfigOutput) * window / 100
 			_, _ = writeAndCount(ctx, resp.ConfigOutput[:n])
-			if ctx.metrics != nil {
-				ctx.metrics.FaultsInjected.WithLabelValues(fault.TypeDisconnectMid.String()).Inc()
-			}
+			ctx.noteFault(fault.TypeDisconnectMid)
 			if ctx.outcome != nil {
 				ctx.outcome.Set("disconnect")
 			}
@@ -211,9 +210,7 @@ func (ctx *sessionCtx) emit(cmd Command, cmdStart time.Time, resp Response) (clo
 			if err := writeMalformed(ctx, resp.ConfigOutput); err != nil {
 				return true
 			}
-			if ctx.metrics != nil {
-				ctx.metrics.FaultsInjected.WithLabelValues(fault.TypeMalformed.String()).Inc()
-			}
+			ctx.noteFault(fault.TypeMalformed)
 		} else {
 			// Hot path: direct write of mmap'd bytes. Zero copy.
 			if _, err := writeAndCount(ctx, resp.ConfigOutput); err != nil {

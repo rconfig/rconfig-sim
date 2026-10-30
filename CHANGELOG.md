@@ -19,11 +19,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `--max-session` (default `5m`) sets how long a session may last before the simulator
   closes it. Raise it for `latency` devices whose sessions run past 5 minutes, or the
   simulator, not the client under test, ends them. A `hang` device still adds its hang.
+- `--fault-rates` (env `FAULT_RATES`) sets a probability per fault type, e.g.
+  `auth_fail=0.02,disconnect_mid=0.005`. Types not listed never fire. `--fault-rate` and
+  `--fault-types` still work and mean the same as giving every listed type that rate. Setting
+  `--fault-rates` with a non-zero `--fault-rate` or a non-empty `--fault-types` is an error.
+- `--active-devices` (env `ACTIVE_DEVICES`, default `all`) limits how many devices, in port
+  order, accept sessions. The rest drop connections like the `refuse` profile.
+- The `rcfg-sim@.service` unit now passes `--ssh-auth`, `--commands-root`, `--max-session`,
+  `--device-profiles`, `--profile-seed`, `--fault-rates` and `--active-devices`, read from the
+  new env variables `SSH_AUTH`, `COMMANDS_ROOT`, `MAX_SESSION`, `DEVICE_PROFILES`,
+  `PROFILE_SEED`, `FAULT_RATES` and `ACTIVE_DEVICES`. The env sample documents them.
+- **Admin API** (off by default): `--admin` (env `ADMIN`) serves `/admin/v1/*` on the
+  `--metrics-addr` listener, to read and change faults, device profiles, response delay, the
+  session cap and active devices at runtime, for new sessions, and to read live activity:
+  `GET state`, `PUT faults`, `PUT profiles`, `PUT behaviour`, `PUT active`, `GET devices`
+  (a state code and last-seen time per device) and `GET events` (a sampled, rate-capped
+  server-sent event stream). `--admin-token` (env `ADMIN_TOKEN`) requires a bearer token.
+  Changes are not persisted. See [Admin API](README.md#admin-api).
+- `make build` stamps the version (`git describe`) into `rcfg-sim`; the admin API reports it.
 
 ### Changed
 
 - The 5-minute session cap is extended by the hang for a `hang` device, so long hangs are
   not cut short. Sessions on other devices keep the 5-minute cap.
+- The `rcfg-sim@.service` unit sets a default for every variable it uses (the flag default;
+  `LISTEN_IP` defaults to the instance name) before reading the env file. Existing env files
+  work unchanged, and a variable left out now takes the flag default instead of an empty
+  value. Reinstall the unit (`make install` or copy it) and run `systemctl daemon-reload`.
+- Faults, device profiles, response delays, the session cap and the active device count are
+  now held in a runtime config that is read once per session, ready for runtime changes in
+  a later release. The session cap is a counter instead of a fixed-size semaphore. No change
+  in behaviour.
+- The "fault injection active" log line reports `rates` (e.g. `auth_fail=0.02`) in place of
+  the separate `rate` and `types` fields.
 
 ## [0.0.5] — 2026-09-27
 

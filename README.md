@@ -36,6 +36,7 @@ Stand up 50,000 fake network devices on a single Linux host. Each one speaks rea
 - [Full deployment](#full-deployment)
 - [Operational runbook](#operational-runbook)
 - [Fault injection](#fault-injection)
+- [Admin API](#admin-api)
 - [Metrics reference](#metrics-reference)
 - [Configuration templates](#configuration-templates)
 - [Command files](#command-files)
@@ -820,7 +821,7 @@ Manifest: /opt/rcfg-sim/manifest.csv (50000 rows)
 - **Staged rollouts** — you can enable fault injection on one IP, observe, then roll to the next. Each instance is independently configurable.
 - **Cleaner diffs** — env files are flat KEY=VALUE, easy to track in version control and compare across instances.
 
-**What each env file contains.** The full set of runtime flags as env vars, read by the systemd unit's `EnvironmentFile=` directive and expanded into the `ExecStart` line. See `/opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample` for the authoritative documented template.
+**What each env file contains.** Runtime flags as env vars, read by the systemd unit's `EnvironmentFile=` directive and expanded into the `ExecStart` line. The unit sets a default for every variable (the flag default; `LISTEN_IP` defaults to the instance name), so a file only needs the values it changes. Every `rcfg-sim` flag can be set this way, including `SSH_AUTH`, `COMMANDS_ROOT`, `MAX_SESSION`, `DEVICE_PROFILES`, `PROFILE_SEED`, `FAULT_RATES` and `ACTIVE_DEVICES`. See `/opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample` for the authoritative documented template.
 
 **Why `PORT_START=10000` for every IP.** Each IP has its own port namespace — `10.50.0.1:10000` and `10.50.0.2:10000` are distinct sockets. Keeping the port range identical across all 20 instances means rConfig's device inventory is predictable (IP changes, port doesn't) and easier to reason about in dashboards and queries.
 
@@ -1056,9 +1057,9 @@ journalctl -u rcfg-sim@10.50.0.1 --output=cat | jq 'select(.level=="ERROR")'
 Useful for localised testing without disrupting the fleet.
 
 ```bash
-# Edit the env file
-sudo sed -i 's/^FAULT_RATE=.*/FAULT_RATE=0.05/' /etc/rcfg-sim/10.50.0.3.env
-sudo sed -i 's/^FAULT_TYPES=.*/FAULT_TYPES=auth_fail,slow_response/' /etc/rcfg-sim/10.50.0.3.env
+# Edit the env file (adds FAULT_RATES if the file predates it)
+sudo sed -i '/^FAULT_RATES=/d' /etc/rcfg-sim/10.50.0.3.env
+echo 'FAULT_RATES=auth_fail=0.05,slow_response=0.02' | sudo tee -a /etc/rcfg-sim/10.50.0.3.env
 
 sudo systemctl restart rcfg-sim@10.50.0.3
 
@@ -1106,7 +1107,7 @@ Leaves `/opt/rcfg-sim/configs` and `/etc/rcfg-sim/*.env` in place. Remove manual
 
 ## Fault injection
 
-Faults exist to exercise rConfig's error handling paths. The four types are independently toggleable and the per-type probability is controlled by `--fault-rate` (or `FAULT_RATE` in env files).
+Faults exist to exercise rConfig's error handling paths. The four types are independent, and each has its own probability, set with `--fault-rates` (or `FAULT_RATES` in env files). The older `--fault-rate` + `--fault-types` pair, one probability for every listed type, still works.
 
 ### Fault types
 
@@ -1120,18 +1121,25 @@ Faults exist to exercise rConfig's error handling paths. The four types are inde
 ### Configuration
 
 ```bash
-# Environment file
-FAULT_RATE=0.02
-FAULT_TYPES=auth_fail,disconnect_mid,slow_response,malformed
+# Environment file: a rate per type; types not listed never fire
+FAULT_RATES=auth_fail=0.02,disconnect_mid=0.005
 
 # Command line
 rcfg-sim \
-  --fault-rate 0.02 \
-  --fault-types "auth_fail,disconnect_mid" \
+  --fault-rates "auth_fail=0.02,disconnect_mid=0.005" \
   ...
 ```
 
-**`FAULT_RATE=0.0`** or **empty `FAULT_TYPES`** disables all fault injection with verified zero overhead on the hot path.
+The legacy form gives every listed type the same rate. These two are identical:
+
+```bash
+--fault-rate 0.02 --fault-types "auth_fail,disconnect_mid"
+--fault-rates "auth_fail=0.02,disconnect_mid=0.02"
+```
+
+Use one form or the other. Setting `--fault-rates` together with a non-zero `--fault-rate` or a non-empty `--fault-types` is an error and the simulator will not start. Each rate must be in `[0,1]`; an unknown or repeated type is an error.
+
+**Empty `FAULT_RATES`** with **`FAULT_RATE=0.0`** or **empty `FAULT_TYPES`** disables all fault injection with verified zero overhead on the hot path. A type at rate `0` costs the same as an absent one.
 
 ### Fault decision semantics
 
@@ -1200,6 +1208,89 @@ The manifest takes an optional 11th column, `profile`, holding one profile witho
 - A hang ends early when the client disconnects or the simulator shuts down.
 - `refuse` sessions count as `rcfgsim_sessions_total{result="error"}`. `disconnect` sessions count as `{result="disconnect"}` and under `rcfgsim_faults_injected_total{type="disconnect_mid"}`. Hung sessions show in `rcfgsim_session_duration_seconds`.
 - Profiles work for every driver: Cisco IOS, Junos and the TL1 personalities.
+
+### Active devices
+
+`--active-devices N` (env `ACTIVE_DEVICES`) makes only the first `N` devices of an instance, in port order from `--port-start`, accept sessions. The rest behave exactly like `refuse`: TCP is accepted and dropped before the SSH handshake, and the session counts as `rcfgsim_sessions_total{result="error"}`. The default, `all`, keeps every device active. `N` must be in `0..port-count`. Use it to shrink the live fleet without regenerating configs or restarting with a different port range.
+
+---
+
+## Admin API
+
+The admin API reads and changes an instance's faults, device profiles, response delay, session cap and active device count while it runs, and serves live activity: a state code per device and a sampled stream of session events. It is **off by default**. Turn it on with `--admin` (env `ADMIN=true`); it is served under `/admin/v1/` on the `--metrics-addr` listener, next to `/metrics` and `/healthz`. With `--admin` off, every `/admin/v1/` path returns 404.
+
+```bash
+rcfg-sim --admin --admin-token "$TOKEN" --metrics-addr 127.0.0.1:9100 ...
+
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9100/admin/v1/state
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" \
+  -d '{"auth_fail": 0.02, "disconnect_mid": 0.005}' http://127.0.0.1:9100/admin/v1/faults
+```
+
+**Changes apply to new sessions only.** A session keeps the settings it started with. **Changes are not saved**: a restart reads the flags or env file again. To keep a change, write it to `/etc/rcfg-sim/<IP>.env` as well.
+
+**Security.** With `--admin-token` set (env `ADMIN_TOKEN`), every admin request must carry `Authorization: Bearer <token>`; `/metrics` and `/healthz` stay open. Anyone who can reach the API can change faults and capacity, so keep `--metrics-addr` on loopback or set a token; the simulator logs a warning when the API is on a non-loopback address with no token. The token is passed on the command line, so treat it as a guard for a shared lab network, not a secret.
+
+All bodies are JSON. Errors are `4xx` with `{"error": "..."}`; unknown fields are rejected. Every successful `PUT` returns the full state, as `GET /admin/v1/state` does, with `generation` one higher.
+
+| Endpoint | Body or query | Does |
+|---|---|---|
+| `GET /admin/v1/state` | | Instance identity and the live config (below) |
+| `PUT /admin/v1/faults` | `{"auth_fail": 0.02, "disconnect_mid": 0.005}` | Sets every fault rate. Types left out are set to 0. Rates in `[0,1]` |
+| `PUT /admin/v1/profiles` | `{"seed": 42, "rules": ["hang:3600s@3%"]}` | Replaces the `--device-profiles` rules (same syntax, one item per string) and seed. `rules` is required (`[]` clears); `seed` left out keeps the current one. Manifest-pinned profiles still win |
+| `PUT /admin/v1/behaviour` | `{"delay_ms": {"min": 50, "max": 500}, "max_sessions": 5000}` | Either key may be left out. `0 <= min <= max <= 3600000`, `max_sessions >= 1`. Lowering the cap ends no session; new ones are refused until the count drops |
+| `PUT /admin/v1/active` | `{"active_devices": 1200}` | As `--active-devices`. Range `0..port_count` |
+| `GET /admin/v1/devices` | | Per-device state and last-seen time (below) |
+| `GET /admin/v1/events` | `?sample=0.01` | Server-sent event stream of sampled session events (below) |
+
+`GET /admin/v1/state`:
+
+```json
+{
+  "version": "0.0.6",
+  "listen_ip": "10.50.0.1",
+  "port_start": 10000,
+  "port_count": 2500,
+  "devices": 2500,
+  "started_at": "2026-10-30T09:00:00Z",
+  "generation": 7,
+  "faults": { "auth_fail": 0.02, "disconnect_mid": 0.005, "slow_response": 0, "malformed": 0 },
+  "profiles": { "seed": 42, "rules": ["hang:3600s@3%", "latency:200-800ms@10%"] },
+  "delay_ms": { "min": 50, "max": 500 },
+  "max_sessions": 5000,
+  "active_devices": 2500,
+  "active_sessions": 312
+}
+```
+
+`generation` counts changes since start (1 at start). `active_sessions` is the count checked against `max_sessions`.
+
+**Devices.** `GET /admin/v1/devices` returns `{"port_start": 10000, "now": <unix seconds>, "state": "<base64>", "last_seen": "<base64>"}`. `state` is one byte per port in the instance's range, in port order; `last_seen` is a little-endian `uint32` of unix seconds per port, `0` for never. Both are standard padded base64.
+
+| Code | State | Meaning |
+|---|---|---|
+| 0 | `never` | No session since start |
+| 1 | `ok` | Last session ended `ok` |
+| 2 | `auth_fail` | Last session ended `auth_fail` |
+| 3 | `disconnect` | Last session ended `disconnect` |
+| 4 | `error` | Last session ended `error` (including `refuse` and session-cap refusals) |
+| 5 | `hang` | Last session was hung by a `hang` profile |
+| 6 | `inactive` | Port is at or past `active_devices` |
+| 7 | `active` | A session is in progress |
+
+The outcomes are those of `rcfgsim_sessions_total{result=...}`. A device with a session in progress shows `active` even if it has just been made inactive.
+
+**Events.** `GET /admin/v1/events` streams [server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html). Each `data:` line is one JSON event:
+
+```json
+{ "t": 1761814800123, "host": "rtr-00042", "port": 10042, "kind": "session_end", "outcome": "auth_fail", "fault": "auth_fail", "bytes": 0, "ms": 412 }
+```
+
+`kind` is `session_start`, `session_end` (with `outcome`, and the session's last `fault` if any) or `fault` (with the fault type). `t` is unix milliseconds, `bytes` the bytes sent in the session so far and `ms` the time since the session started. `sample` is the share of events kept, in `(0,1]`, default `0.01`. Each stream gets at most 200 events per second; events past that, or that a slow client cannot keep up with, are dropped and reported once a second as `{"kind":"dropped","n":123}`. With no stream open, events cost nothing.
+
+```bash
+curl -sN -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:9100/admin/v1/events?sample=0.1'
+```
 
 ---
 
@@ -1574,11 +1665,15 @@ SSH server. One instance per IP alias.
 --response-delay-ms-max int    Maximum response delay (default 500)
 --fault-rate float             Per-event fault probability 0.0-1.0 (default 0.0)
 --fault-types string           Enabled fault types, comma-separated (default "")
+--fault-rates string           Per-type fault probabilities, type=rate,...; not with --fault-rate/--fault-types (default "" = off)
 --device-profiles string       Per-device behaviour for a share of the fleet, profile@percent,... (default "" = off)
 --profile-seed int             Seed deciding which devices --device-profiles picks (default 42)
 --max-concurrent-sessions int  Hard cap on concurrent sessions (default 5000)
 --max-session duration         Longest a session may last before it is closed; a hang profile adds its hang (default 5m)
+--active-devices string        Devices accepting sessions, in port order: all or 0..port-count; the rest refuse (default "all")
 --commands-root string         Per-device command output files, DIR/<hostname>/<slug>.txt (default "" = off)
+--admin                        Serve the admin API (/admin/v1/*) on --metrics-addr (default false)
+--admin-token string           If set, admin API requests must send Authorization: Bearer <token> (default "" = no token)
 --log-level string             error|warn|info|debug (default "info")
 ```
 

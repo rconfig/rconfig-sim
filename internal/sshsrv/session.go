@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/rcfg-sim/rcfg-sim/internal/activity"
 	"github.com/rcfg-sim/rcfg-sim/internal/configs"
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 	"github.com/rcfg-sim/rcfg-sim/internal/metrics"
@@ -33,8 +34,9 @@ type sessionCtx struct {
 	metrics        *metrics.Registry
 	outcome        *sessionOutcome
 	faults         *fault.Set
-	rawConn        net.Conn  // for hard-close (disconnect_mid) fault
-	cmdFiles       *cmdFiles // --commands-root lookup; nil when the flag is unset
+	events         *activity.Bus // session events; nil in unit tests
+	rawConn        net.Conn      // for hard-close (disconnect_mid) fault
+	cmdFiles       *cmdFiles     // --commands-root lookup; nil when the flag is unset
 
 	// profile is this device's behaviour profile; nil for a normal device.
 	profile *profile.Profile
@@ -46,14 +48,23 @@ type sessionCtx struct {
 	serverDone <-chan struct{}
 }
 
-// writeAndCount writes to the channel and increments the bytes_sent counter
-// by the number of bytes actually accepted. Metrics may be nil in unit tests.
+// writeAndCount writes to the channel and increments the bytes_sent counter,
+// and the session's own byte count, by the number of bytes actually
+// accepted. Metrics and outcome may be nil in unit tests.
 func writeAndCount(ctx *sessionCtx, p []byte) (int, error) {
 	n, err := ctx.ch.Write(p)
 	if n > 0 && ctx.metrics != nil {
 		ctx.metrics.BytesSent.Add(float64(n))
 	}
+	if n > 0 && ctx.outcome != nil {
+		ctx.outcome.bytes.Add(int64(n))
+	}
 	return n, err
+}
+
+// noteFault records an injected fault of type t for this session.
+func (ctx *sessionCtx) noteFault(t fault.Type) {
+	noteFault(ctx.metrics, ctx.events, ctx.dev, ctx.outcome, t)
 }
 
 // observeCmd records the command duration with the canonical Cmd* label.
