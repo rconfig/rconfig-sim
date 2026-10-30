@@ -6,6 +6,7 @@ import (
 
 	"github.com/rcfg-sim/rcfg-sim/internal/configs"
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
+	"github.com/rcfg-sim/rcfg-sim/internal/profile"
 )
 
 // Driver renders one vendor/model's interactive SSH session. A driver owns its
@@ -109,10 +110,23 @@ func registeredCommands() []string {
 //
 // This is the exact delay logic previously inline in runShell; it is the only
 // place a response sleep happens, so neither driver may sleep elsewhere.
+//
+// Device profiles act here too, so every driver gets them: a hang profile
+// stalls the first command of the session (see hang), and a latency profile
+// replaces the global min/max jitter.
 func (ctx *sessionCtx) applyResponseDelay() {
-	delayMS := ctx.delayMinMS
-	if ctx.delayMaxMS > ctx.delayMinMS {
-		delayMS += ctx.rng.Intn(ctx.delayMaxMS - ctx.delayMinMS + 1)
+	if ctx.profile.Is(profile.KindHang) && !ctx.hung {
+		ctx.hung = true
+		ctx.hang(ctx.profile.Hang)
+	}
+
+	minMS, maxMS := ctx.delayMinMS, ctx.delayMaxMS
+	if ctx.profile.Is(profile.KindLatency) {
+		minMS, maxMS = int(ctx.profile.LatencyMin.Milliseconds()), int(ctx.profile.LatencyMax.Milliseconds())
+	}
+	delayMS := minMS
+	if maxMS > minMS {
+		delayMS += ctx.rng.Intn(maxMS - minMS + 1)
 	}
 	// slow_response fault: multiply delay by uniform[10,50], cap at 60s.
 	// Guarantee at least 10ms of base so the multiplier is observable even when
@@ -132,6 +146,25 @@ func (ctx *sessionCtx) applyResponseDelay() {
 	}
 	if delayMS > 0 {
 		time.Sleep(time.Duration(delayMS) * time.Millisecond)
+	}
+}
+
+// hang answers nothing for d, as a device that stopped responding mid-session.
+// Commands the client sends meanwhile wait in the channel and are answered,
+// in order, once the hang ends. It ends early if the client goes away, so an
+// abandoned session does not hold a goroutine for the full hang, and on server
+// shutdown, which closes the connection so Shutdown is not held up.
+func (ctx *sessionCtx) hang(d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-ctx.connDone:
+	case <-ctx.serverDone:
+		if ctx.rawConn != nil {
+			_ = ctx.rawConn.Close()
+		}
 	}
 }
 
@@ -155,7 +188,9 @@ func (ctx *sessionCtx) emit(cmd Command, cmdStart time.Time, resp Response) (clo
 		// Happens before any malformed check because the connection is going
 		// away anyway. Observe the command duration first so phase-5 metrics
 		// still reflect work the dispatcher did.
-		if ctx.faults.Roll(ctx.rng, fault.TypeDisconnectMid) {
+		// A disconnect profile always takes this path; it is counted under
+		// disconnect_mid like the fault it reproduces.
+		if ctx.profile.Is(profile.KindDisconnect) || ctx.faults.Roll(ctx.rng, fault.TypeDisconnectMid) {
 			window := 20 + ctx.rng.Intn(21) // 20..40 inclusive
 			n := len(resp.ConfigOutput) * window / 100
 			_, _ = writeAndCount(ctx, resp.ConfigOutput[:n])

@@ -24,6 +24,7 @@ import (
 	"github.com/rcfg-sim/rcfg-sim/internal/configs"
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 	"github.com/rcfg-sim/rcfg-sim/internal/metrics"
+	"github.com/rcfg-sim/rcfg-sim/internal/profile"
 )
 
 // Config is everything the Server needs to run. Only fields supplied by the CLI.
@@ -51,7 +52,15 @@ type Config struct {
 	// output of the matching command. Empty disables the feature.
 	CommandsRoot string
 	Faults       *fault.Set
-	Logger       *slog.Logger
+	// DeviceProfiles assigns behaviour profiles to a share of the devices
+	// (--device-profiles); ProfileSeed decides which devices (--profile-seed).
+	// A device's manifest `profile` column overrides both.
+	DeviceProfiles []profile.Rule
+	ProfileSeed    int64
+	// MaxSessionDuration caps a session's life (--max-session). Zero means
+	// the 5-minute default. A hang profile extends it by the hang.
+	MaxSessionDuration time.Duration
+	Logger             *slog.Logger
 }
 
 // Server owns the TCP listeners, SSH handshake machinery, loaded devices,
@@ -73,6 +82,7 @@ type Server struct {
 	metrics     *metrics.Registry
 	metricsHTTP *http.Server
 	cmdFiles    *cmdFiles
+	profiles    map[int]*profile.Profile // by port; absent = normal device
 }
 
 // New loads host key + device configs and prepares the Server, but does NOT
@@ -119,6 +129,11 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("manifest names unknown driver(s) in the template column: %s", strings.Join(bad, ", "))
 	}
 
+	profiles, err := resolveProfiles(devs, cfg.DeviceProfiles, cfg.ProfileSeed)
+	if err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := &Server{
 		cfg:      cfg,
@@ -132,7 +147,9 @@ func New(cfg Config) (*Server, error) {
 		totalMap: total,
 		metrics:  metrics.New(),
 		cmdFiles: newCmdFiles(cfg.CommandsRoot),
+		profiles: profiles,
 	}
+	srv.logProfiles(devs)
 	// Pre-register the command_duration label values every registered driver can
 	// emit, so vendor-specific values (e.g. TL1) appear in /metrics at zero from
 	// the first scrape — the same guarantee metrics.KnownCommands gives Cisco.
@@ -143,6 +160,62 @@ func New(cfg Config) (*Server, error) {
 		srv.metrics.CommandDuration.WithLabelValues(CmdFile.String())
 	}
 	return srv, nil
+}
+
+// resolveProfiles gives each device its behaviour profile: the manifest
+// `profile` column when set, otherwise whatever the rules assign its hostname.
+func resolveProfiles(devs []*configs.Device, rules []profile.Rule, seed int64) (map[int]*profile.Profile, error) {
+	out := map[int]*profile.Profile{}
+	for _, d := range devs {
+		p, err := profile.ParseProfile(d.Profile)
+		if err != nil {
+			return nil, fmt.Errorf("manifest device %s (port %d): %w", d.Hostname, d.Port, err)
+		}
+		if p == nil {
+			p = profile.Assign(d.Hostname, seed, rules)
+		}
+		if p != nil {
+			out[d.Port] = p
+		}
+	}
+	return out, nil
+}
+
+// maxLoggedProfileHosts caps the hostnames logged per profile at startup.
+const maxLoggedProfileHosts = 50
+
+// logProfiles logs, per profile, how many devices have it and which ones, so
+// an operator can tell which devices in rConfig should misbehave.
+func (s *Server) logProfiles(devs []*configs.Device) {
+	if len(s.profiles) == 0 {
+		return
+	}
+	hosts := map[string][]string{}
+	var order []string
+	for _, d := range devs {
+		p, ok := s.profiles[d.Port]
+		if !ok {
+			continue
+		}
+		key := p.String()
+		if _, seen := hosts[key]; !seen {
+			order = append(order, key)
+		}
+		hosts[key] = append(hosts[key], d.Hostname)
+	}
+	for _, key := range order {
+		names := hosts[key]
+		logged := names
+		if len(logged) > maxLoggedProfileHosts {
+			logged = logged[:maxLoggedProfileHosts]
+		}
+		s.logger.Info("device profile active",
+			"profile", key,
+			"devices", len(names),
+			"hostnames", strings.Join(logged, ","),
+			"hostnames_truncated", len(names) > len(logged),
+		)
+	}
 }
 
 // Metrics returns the metrics registry — primarily for integration tests
@@ -294,6 +367,16 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 		s.metrics.SessionsTotal.WithLabelValues(outcome.Get()).Inc()
 	}()
 
+	prof := s.profiles[dev.Port]
+
+	// refuse profile: the device accepts TCP and drops it before the SSH
+	// handshake, as a box whose SSH daemon is dead or rate limiting.
+	if prof.Is(profile.KindRefuse) {
+		outcome.Set("error")
+		hardCloseTCP(conn)
+		return
+	}
+
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -357,8 +440,17 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 	s.metrics.ActiveSessions.Inc()
 	defer s.metrics.ActiveSessions.Dec()
 
-	hardTimer := time.AfterFunc(5*time.Minute, func() { _ = sshConn.Close() })
+	// Cap on a session's life. A hang profile extends it by the hang, or the
+	// cap would cut every hang longer than the cap short.
+	maxSession := s.cfg.MaxSessionDuration
+	if maxSession <= 0 {
+		maxSession = 5 * time.Minute
+	}
+	hardTimer := time.AfterFunc(maxSession+prof.HangDuration(), func() { _ = sshConn.Close() })
 	defer hardTimer.Stop()
+
+	connDone := make(chan struct{})
+	defer close(connDone)
 
 	go ssh.DiscardRequests(reqs)
 
@@ -373,7 +465,7 @@ func (s *Server) handleConn(conn net.Conn, dev *configs.Device) {
 			outcome.Set("error")
 			continue
 		}
-		go s.handleSession(ch, reqs, dev, sshConn.User(), outcome, conn, rng)
+		go s.handleSession(ch, reqs, dev, sshConn.User(), outcome, conn, rng, prof, connDone)
 	}
 }
 
@@ -431,7 +523,7 @@ func indexOf(s, sub string) int {
 	return -1
 }
 
-func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *configs.Device, loginUser string, outcome *sessionOutcome, rawConn net.Conn, rng *mrand.Rand) {
+func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *configs.Device, loginUser string, outcome *sessionOutcome, rawConn net.Conn, rng *mrand.Rand, prof *profile.Profile, connDone <-chan struct{}) {
 	shellStarted := false
 	ctx := &sessionCtx{
 		ch:             ch,
@@ -450,6 +542,9 @@ func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request, dev *co
 		faults:         s.cfg.Faults,
 		rawConn:        rawConn,
 		cmdFiles:       s.cmdFiles,
+		profile:        prof,
+		connDone:       connDone,
+		serverDone:     s.ctx.Done(),
 	}
 	for req := range reqs {
 		switch req.Type {

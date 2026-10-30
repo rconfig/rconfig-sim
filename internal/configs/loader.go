@@ -22,6 +22,9 @@ type Device struct {
 	Data         []byte
 	Size         int64
 	SerialNumber string
+	// Profile is the optional 11th manifest column ("profile"), e.g. "hang:3600s".
+	// Empty means the device takes its profile, if any, from --device-profiles.
+	Profile string
 }
 
 // LoadForListener reads the generator's manifest, selects rows matching the
@@ -62,6 +65,10 @@ func LoadForListener(manifestPath, listenIP string, portStart, portCount int) ([
 		if port < portStart || port >= portEnd {
 			continue
 		}
+		profile := ""
+		if len(row) > 10 {
+			profile = row[10]
+		}
 		devices = append(devices, &Device{
 			Hostname:     row[0],
 			IP:           row[1],
@@ -71,6 +78,7 @@ func LoadForListener(manifestPath, listenIP string, portStart, portCount int) ([
 			ConfigPath:   row[8],
 			SizeBucket:   row[9],
 			SerialNumber: serialFor(row[0]),
+			Profile:      profile,
 		})
 	}
 
