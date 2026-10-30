@@ -16,27 +16,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # x/crypto and x/sys (and go.mod) require Go 1.24; test the floor + latest.
-        go: ['1.24', '1.25']
+        # go.mod (and x/crypto, x/sys) require Go 1.24, so 1.24 is the floor.
+        # Older versions can't build this module. Add each new Go release here.
+        go: ['1.24', '1.25', '1.26', '1.27']
+    env:
+      # Without this, Go silently downloads a newer toolchain when go.mod asks
+      # for one, so a matrix entry could end up testing a different Go version.
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go ${{ matrix.go }}
-        uses: actions/setup-go@v5
+        # setup-go caches the module and build caches itself, keyed on go.sum.
+        # Adding actions/cache on the same paths makes the two restores collide.
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           check-latest: true
-
-      - name: Cache Go build + module cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.go }}-
 
       - name: go vet
         run: go vet ./...
