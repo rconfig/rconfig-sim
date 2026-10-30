@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
+	"github.com/rcfg-sim/rcfg-sim/internal/profile"
 	"github.com/rcfg-sim/rcfg-sim/internal/sshsrv"
 )
 
@@ -21,6 +22,7 @@ func main() {
 		logLevel     = flag.String("log-level", "info", "log level: error|warn|info|debug")
 		faultTypes   = flag.String("fault-types", "", "comma-separated fault types: auth_fail,disconnect_mid,slow_response,malformed")
 		faultRate    = flag.Float64("fault-rate", 0.0, "probability [0,1] that an enabled fault fires per event")
+		devProfiles  = flag.String("device-profiles", "", "per-device behaviour for a share of the fleet: profile@percent,... e.g. hang:3600s@3%,latency:200-800ms@10% (profiles: hang:<duration>, latency:<min>-<max>, refuse, disconnect)")
 	)
 	flag.StringVar(&cfg.MetricsAddr, "metrics-addr", "0.0.0.0:9100", "Prometheus metrics listen address (empty = disable)")
 	flag.StringVar(&cfg.ListenIP, "listen-ip", "10.50.0.1", "IP address to bind")
@@ -34,7 +36,9 @@ func main() {
 	flag.IntVar(&cfg.ResponseDelayMinMS, "response-delay-ms-min", 50, "min per-command response delay (ms)")
 	flag.IntVar(&cfg.ResponseDelayMaxMS, "response-delay-ms-max", 500, "max per-command response delay (ms)")
 	flag.StringVar(&cfg.CommandsRoot, "commands-root", "", "directory of per-device command output files, DIR/<hostname>/<slug>.txt (empty = disabled)")
+	flag.Int64Var(&cfg.ProfileSeed, "profile-seed", 42, "seed deciding which devices --device-profiles picks; same seed, same devices")
 	flag.IntVar(&cfg.MaxConcurrentSessions, "max-concurrent-sessions", 5000, "semaphore cap on concurrent sessions")
+	flag.DurationVar(&cfg.MaxSessionDuration, "max-session", 5*time.Minute, "longest a session may last before the simulator closes it; a hang profile adds its hang")
 
 	flag.Parse()
 
@@ -54,6 +58,13 @@ func main() {
 		}
 		cfg.Logger.Info("fault injection active", "rate", faults.Rate(), "types", strings.Join(types, ","))
 	}
+
+	rules, err := profile.Parse(*devProfiles)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rcfg-sim: --device-profiles: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.DeviceProfiles = rules
 
 	server, err := sshsrv.New(cfg)
 	if err != nil {

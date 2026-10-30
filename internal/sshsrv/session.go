@@ -14,6 +14,7 @@ import (
 	"github.com/rcfg-sim/rcfg-sim/internal/configs"
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 	"github.com/rcfg-sim/rcfg-sim/internal/metrics"
+	"github.com/rcfg-sim/rcfg-sim/internal/profile"
 )
 
 // sessionCtx is everything the shell loop needs to service one channel.
@@ -34,6 +35,15 @@ type sessionCtx struct {
 	faults         *fault.Set
 	rawConn        net.Conn  // for hard-close (disconnect_mid) fault
 	cmdFiles       *cmdFiles // --commands-root lookup; nil when the flag is unset
+
+	// profile is this device's behaviour profile; nil for a normal device.
+	profile *profile.Profile
+	// hung is set once a hang profile has run its hang in this session.
+	hung bool
+	// connDone closes when the connection ends; serverDone when the server
+	// shuts down. Either one cuts a hang short. Nil channels never fire.
+	connDone   <-chan struct{}
+	serverDone <-chan struct{}
 }
 
 // writeAndCount writes to the channel and increments the bytes_sent counter

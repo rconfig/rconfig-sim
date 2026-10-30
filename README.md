@@ -1,18 +1,14 @@
 <div align="center">
 
-<img src="docs/images/logo.png" alt="rconfig-sim logo" width="180" />
-
-# rconfig-sim
+<img src="docs/images/rconfig_sim_logo_and_icon_with_strapline_gradient.svg" alt="Sim by rConfig" width="320" />
 
 **A high-density Cisco IOS SSH simulator for load testing [rConfig](https://www.rconfig.com) at scale.**
-
-<img src="docs/images/social-preview.png" alt="rconfig-sim in action: 50,000 Cisco IOS devices · one host · real SSH" />
 
 Stand up 50,000 fake network devices on a single Linux host. Each one speaks real SSH, serves realistic multi-KB to multi-MB running-configs, and responds exactly like Cisco IOS — enough to exercise rConfig's scheduler, collectors, parser, diff engine, and storage pipeline under production-shaped load.
 
 [![CI](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rconfig/rconfig-sim/actions/workflows/ci.yml)
-[![Docs](https://img.shields.io/badge/docs-simdocs.rconfig.com-4f46e5)](https://simdocs.rconfig.com)
-[![Website](https://img.shields.io/badge/website-rconfig.com%2Frconfig--sim-D97757)](https://www.rconfig.com/rconfig-sim)
+[![Docs](https://img.shields.io/badge/docs-simdocs.rconfig.com-8C4220)](https://simdocs.rconfig.com)
+[![Website](https://img.shields.io/badge/website-rconfig.com%2Frconfig--sim-CC7A5C)](https://www.rconfig.com/rconfig-sim)
 [![Go Version](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)]()
@@ -1169,6 +1165,42 @@ rate(rcfgsim_faults_injected_total{type="auth_fail"}[5m])
 rate(rcfgsim_auth_attempts_total{result="fail"}[5m])
 ```
 
+## Device profiles
+
+Faults are random per event across the whole fleet. A **device profile** is the opposite: a fixed way one device misbehaves on every session, so a test can say "these 3 devices hang" and check what rConfig did with exactly those devices.
+
+| Profile | What it simulates | How rConfig sees it |
+|---|---|---|
+| `hang:<duration>` | A device that stops responding mid-session | Login succeeds, then no output from the first command for `<duration>` (e.g. `3600s`, `2h`). Commands sent meanwhile are answered, in order, once the hang ends. Every new session hangs again. |
+| `latency:<min>-<max>` | A slow device or a long WAN path | Every command waits uniform[min, max] (e.g. `200-800ms`, `1s-3s`, or a fixed `500ms`), replacing `--response-delay-ms-min/max` for that device |
+| `refuse` | A dead or rate-limiting SSH daemon | TCP connects, then closes before the SSH handshake |
+| `disconnect` | A device that always drops mid-transfer | Every `show running-config` is cut part way, as `disconnect_mid` at rate 1 |
+
+### Assigning profiles to a share of the fleet
+
+```bash
+rcfg-sim \
+  --device-profiles "hang:3600s@3%,latency:200-800ms@10%" \
+  --profile-seed 42 \
+  ...
+```
+
+Which devices get which profile depends only on `--profile-seed` and the device's hostname. The same seed picks the same devices on every run and on every simulator instance, however the fleet is split across IPs. Percentages may add up to at most 100; no device gets two profiles.
+
+At startup the simulator logs one `device profile active` line per profile, with the device count and up to 50 hostnames. Use it to find those devices in rConfig.
+
+### Pinning a profile to one device
+
+The manifest takes an optional 11th column, `profile`, holding one profile without a percentage (e.g. `hang:7200s`). A value there overrides `--device-profiles` for that device; an empty value leaves it to the flag. Manifests without the column load as before. An invalid value stops the simulator at startup, naming the device.
+
+### Notes
+
+- A hang longer than the 5-minute session cap extends the cap by the hang, so a 2-hour hang is not cut at 5 minutes.
+- Every other session keeps the cap, including slow `latency` devices. When a slow device's whole session runs past 5 minutes, raise the cap with `--max-session 15m`, or the simulator ends the session itself.
+- A hang ends early when the client disconnects or the simulator shuts down.
+- `refuse` sessions count as `rcfgsim_sessions_total{result="error"}`. `disconnect` sessions count as `{result="disconnect"}` and under `rcfgsim_faults_injected_total{type="disconnect_mid"}`. Hung sessions show in `rcfgsim_session_duration_seconds`.
+- Profiles work for every driver: Cisco IOS, Junos and the TL1 personalities.
+
 ---
 
 ## Metrics reference
@@ -1542,7 +1574,10 @@ SSH server. One instance per IP alias.
 --response-delay-ms-max int    Maximum response delay (default 500)
 --fault-rate float             Per-event fault probability 0.0-1.0 (default 0.0)
 --fault-types string           Enabled fault types, comma-separated (default "")
+--device-profiles string       Per-device behaviour for a share of the fleet, profile@percent,... (default "" = off)
+--profile-seed int             Seed deciding which devices --device-profiles picks (default 42)
 --max-concurrent-sessions int  Hard cap on concurrent sessions (default 5000)
+--max-session duration         Longest a session may last before it is closed; a hang profile adds its hang (default 5m)
 --commands-root string         Per-device command output files, DIR/<hostname>/<slug>.txt (default "" = off)
 --log-level string             error|warn|info|debug (default "info")
 ```
@@ -1802,7 +1837,7 @@ MIT. See [LICENSE](LICENSE).
 <div align="center">
 
 <a href="https://www.rconfig.com/rconfig-sim">
-  <img src="docs/images/logo.png" alt="rconfig-sim" width="72" />
+  <img src="docs/images/rconfig_sim_logo_and_icon_with_strapline_gradient.svg" alt="Sim by rConfig" width="160" />
 </a>
 
 **[rconfig.com/rconfig-sim](https://www.rconfig.com/rconfig-sim)** — project landing page, release notes, and roadmap.
