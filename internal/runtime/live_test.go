@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
+	"github.com/rcfg-sim/rcfg-sim/internal/profile"
 )
 
 func TestHolderZeroValue(t *testing.T) {
@@ -173,5 +174,46 @@ func TestHolderUpdateConcurrentFieldsSurvive(t *testing.T) {
 	cur := h.Load()
 	if cur.MaxSessions != n || cur.ActiveDevices != n || cur.Generation != 1+2*n {
 		t.Fatalf("lost update: %+v", cur)
+	}
+}
+
+func TestHolderUpdateNoChangeKeepsGeneration(t *testing.T) {
+	faults, _ := fault.ParseRates("auth_fail=0.1")
+	h := NewHolder(&Live{Faults: faults, MaxSessions: 5, ProfileRules: []string{"refuse@1%"}})
+	before := h.Load()
+
+	same, _ := fault.ParseRates("auth_fail=0.1") // equal value, new pointer
+	got, err := h.Update(func(l *Live) error {
+		l.Faults = same
+		l.ProfileRules = []string{"refuse@1%"}
+		l.MaxSessions = 5
+		return nil
+	})
+	if err != nil || got != before || got.Generation != 1 {
+		t.Fatalf("no-op Update: want the current Live at generation 1, got %+v (err %v)", got, err)
+	}
+
+	got, _ = h.Update(func(l *Live) error { l.MaxSessions = 6; return nil })
+	if got.Generation != 2 {
+		t.Fatalf("real change: want generation 2, got %d", got.Generation)
+	}
+}
+
+func TestLiveEqual(t *testing.T) {
+	empty, _ := fault.NewSet("", 0)
+	if !(&Live{}).Equal(&Live{Faults: empty}) {
+		t.Error("nil faults must equal an empty Set")
+	}
+	a := &Live{Profiles: map[int]*profile.Profile{1: {Kind: profile.KindRefuse}}}
+	b := &Live{Profiles: map[int]*profile.Profile{1: {Kind: profile.KindRefuse}}}
+	if !a.Equal(b) {
+		t.Error("equal profile values must compare equal")
+	}
+	b.Profiles[1] = &profile.Profile{Kind: profile.KindDisconnect}
+	if a.Equal(b) {
+		t.Error("different profiles must not compare equal")
+	}
+	if (&Live{ProfileSeed: 1}).Equal(&Live{ProfileSeed: 2}) {
+		t.Error("different seeds must not compare equal")
 	}
 }

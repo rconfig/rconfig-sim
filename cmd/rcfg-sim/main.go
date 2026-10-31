@@ -32,7 +32,7 @@ func main() {
 		faultRate    = flag.Float64("fault-rate", 0.0, "probability [0,1] that an enabled fault fires per event")
 		faultRates   = flag.String("fault-rates", "", "per-type fault probabilities [0,1]: type=rate,... e.g. auth_fail=0.02,disconnect_mid=0.005 (replaces --fault-rate/--fault-types; setting both is an error)")
 		adminOn      = flag.Bool("admin", false, "serve the admin API (/admin/v1/*) on --metrics-addr")
-		adminToken   = flag.String("admin-token", "", "if set, admin API requests must send Authorization: Bearer <token>")
+		adminToken   = flag.String("admin-token", "", "if set, admin API requests must send Authorization: Bearer <token>; unset falls back to the ADMIN_TOKEN environment variable (preferred: a command line is visible in ps)")
 		activeDevs   = flag.String("active-devices", "all", "how many devices, in port order from --port-start, accept sessions: all, or 0..port-count; the rest drop connections like the refuse profile")
 		devProfiles  = flag.String("device-profiles", "", "per-device behaviour for a share of the fleet: profile@percent,... e.g. hang:3600s@3%,latency:200-800ms@10% (profiles: hang:<duration>, latency:<min>-<max>, refuse, disconnect)")
 	)
@@ -53,6 +53,9 @@ func main() {
 	flag.DurationVar(&cfg.MaxSessionDuration, "max-session", 5*time.Minute, "longest a session may last before the simulator closes it; a hang profile adds its hang")
 
 	flag.Parse()
+	if *adminToken == "" {
+		*adminToken = os.Getenv("ADMIN_TOKEN")
+	}
 
 	cfg.ManifestPath = *manifestPath
 	cfg.Logger = makeLogger(*logLevel)
@@ -104,11 +107,11 @@ func main() {
 			Logger:    cfg.Logger,
 		}))
 		if *adminToken == "" && !loopback(cfg.MetricsAddr) {
-			cfg.Logger.Warn("admin API is on a non-loopback address with no --admin-token; anyone who can reach it can change faults and capacity", "metrics_addr", cfg.MetricsAddr)
+			cfg.Logger.Warn("admin API is on a non-loopback address with no admin token; anyone who can reach it can change faults and capacity", "metrics_addr", cfg.MetricsAddr)
 		}
 		cfg.Logger.Info("admin API enabled", "addr", cfg.MetricsAddr, "prefix", admin.Prefix, "token", *adminToken != "")
 	} else if *adminToken != "" {
-		cfg.Logger.Warn("--admin-token is set but --admin is not; the admin API is off")
+		cfg.Logger.Warn("an admin token is set but --admin is not; the admin API is off")
 	}
 
 	if err := server.Start(); err != nil {

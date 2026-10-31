@@ -1,0 +1,147 @@
+package views
+
+// Layout is the shell of every page: header with logo, fleet health and
+// theme toggle; the left rail; the pending-changes bar and flash area.
+templ Layout(p Page) {
+	<!DOCTYPE html>
+	<html lang="en" data-theme="dark">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0}'/>
+			<title>{ p.Title } · Sim by rConfig</title>
+			<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml"/>
+			for _, css := range p.Styles {
+				<link rel="stylesheet" href={ css }/>
+			}
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/theme.js"></script>
+			<script src="/static/vendor/htmx-2.0.11.min.js" defer></script>
+			<script src="/static/app.js" defer></script>
+			for _, js := range p.Scripts {
+				<script src={ js } defer></script>
+			}
+		</head>
+		<body class="min-h-screen text-sm">
+			<header class="brand-hairline sticky top-0 z-20 border-b border-line bg-panel">
+				<div class="flex h-14 items-center gap-4 px-4">
+					<a href="/" class="flex items-center" aria-label="Sim by rConfig: fleet">
+						<img class="logo-dark h-8 w-auto" src="/static/img/sim-logo-white.svg" alt="Sim by rConfig"/>
+						<img class="logo-light h-8 w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
+					</a>
+					@HealthPill(p.Up, p.Total, false)
+					<div class="ml-auto flex items-center gap-1 rounded-card border border-line p-0.5" role="group" aria-label="Theme">
+						for _, t := range []string{"dark", "light", "auto"} {
+							<button type="button" data-theme-set={ t } aria-pressed="false" class="rounded-md px-2.5 py-1 text-xs capitalize text-muted hover:text-fg aria-pressed:bg-tint aria-pressed:text-fg">{ t }</button>
+						}
+					</div>
+				</div>
+			</header>
+			<div class="flex">
+				<nav class="sticky top-14 h-[calc(100vh-3.5rem)] w-44 shrink-0 border-r border-line p-3" aria-label="Main">
+					<ul class="flex flex-col gap-1">
+						@navItem("/fleet", "Fleet", p.Nav == "fleet", true)
+						@navItem("/failures", "Failures", p.Nav == "failures", true)
+						@navItem("/activity", "Activity", p.Nav == "activity", true)
+						@navItem("", "Build", false, false)
+					</ul>
+				</nav>
+				<main class="min-w-0 flex-1 p-6">
+					<div id="pending" class="sticky top-16 z-10" aria-live="polite"></div>
+					<div id="flash" aria-live="polite"></div>
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}
+
+templ navItem(href, label string, current, enabled bool) {
+	<li>
+		if enabled {
+			<a
+				href={ templ.SafeURL(href) }
+				if current {
+					aria-current="page"
+				}
+				class={ "block rounded-md px-3 py-2 no-underline", templ.KV("bg-tint text-fg", current), templ.KV("text-muted hover:text-fg", !current) }
+			>{ label }</a>
+		} else {
+			<span class="block cursor-not-allowed px-3 py-2 text-muted opacity-50" title="Not in this release">{ label }</span>
+		}
+	</li>
+}
+
+// HealthPill shows instances up out of total. oob swaps it in from a
+// polled fragment.
+templ HealthPill(up, total int, oob bool) {
+	<span
+		id="health"
+		if oob {
+			hx-swap-oob="true"
+		}
+		class={ "num rounded-full border px-2.5 py-0.5 text-xs", templ.KV("border-st-ok text-st-ok", total > 0 && up == total), templ.KV("border-st-auth text-st-auth", up < total) }
+	>
+		{ itoa(up) } / { itoa(total) } instances up
+	</span>
+}
+
+// Flashes renders action results into #flash.
+templ Flashes(fs []Flash) {
+	for _, f := range fs {
+		<div class={ "mb-4 rounded-card border-l-4 border-y border-r border-line bg-panel px-4 py-3", flashClass(f.Kind) } role="status">
+			<p class="font-medium">{ f.Text }</p>
+			if len(f.Lines) > 0 {
+				<ul class="mt-1 list-disc pl-5 text-muted">
+					for _, l := range f.Lines {
+						<li>{ l }</li>
+					}
+				</ul>
+			}
+		</div>
+	}
+}
+
+// PendingBar is the pending-changes bar. Empty when nothing would change.
+templ PendingBar(d Diff) {
+	if len(d.Items) > 0 {
+		<div class="brand-fill mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-card px-4 py-3 shadow-sm">
+			<div class="min-w-0 flex-1">
+				<p class="font-semibold">Pending changes, not applied</p>
+				<ul class="mt-1 flex flex-col gap-0.5">
+					for _, it := range d.Items {
+						<li><span class="font-medium">{ it.What }:</span> <span class="num">{ it.From }</span> → <span class="num font-semibold">{ it.To }</span></li>
+					}
+				</ul>
+				if d.Note != "" {
+					<p class="mt-1 text-xs">{ d.Note }</p>
+				}
+			</div>
+			<button type="button" hx-post={ d.ApplyURL } hx-include={ "#" + d.Form } hx-target="#flash" class="rounded-md bg-zinc-950 px-4 py-2 font-semibold text-white hover:bg-zinc-800">Apply</button>
+		</div>
+	}
+}
+
+// ClearPending empties the pending bar out of band, after an apply.
+templ ClearPending() {
+	<div id="pending" hx-swap-oob="innerHTML"></div>
+}
+
+// Unauthorized is shown when a UI token is set and the request has none.
+templ Unauthorized() {
+	<!DOCTYPE html>
+	<html lang="en" data-theme="dark">
+		<head>
+			<meta charset="utf-8"/>
+			<title>Sign in · Sim by rConfig</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/theme.js"></script>
+		</head>
+		<body class="grid min-h-screen place-items-center p-6">
+			<div class="brand-hairline max-w-md rounded-card border border-line bg-panel p-6">
+				<h1 class="text-xl">Token required</h1>
+				<p class="mt-2 text-muted">This rcfg-sim-ui needs its token. Open <code class="num">/login?token=&lt;token&gt;</code> once in this browser; a cookie keeps you signed in.</p>
+			</div>
+		</body>
+	</html>
+}

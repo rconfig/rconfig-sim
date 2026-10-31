@@ -6,6 +6,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Breaking
+
+- **The `rcfg-sim@.service` unit's `HOST_KEY` default is now
+  `/opt/rcfg-sim/host-keys/<IP>.key`**, and `/etc/rcfg-sim` is no longer in its
+  `ReadWritePaths=`. `make install` also makes `/etc/rcfg-sim` `root:rcfgsim-ui 2770`, so the
+  device processes (user `rcfgsim`) can no longer read or write anything there. An instance
+  whose env file leaves `HOST_KEY` out, or sets it under `/etc/rcfg-sim`, will generate a new
+  host key at the new path on its next start, and SSH clients will see a changed host key.
+  The binary's own `--host-key` default is unchanged.
+
+#### Migration
+
+Move each instance's existing key and point the env file at it, before restarting:
+
+```bash
+sudo install -d -m 0700 -o rcfgsim -g rcfgsim /opt/rcfg-sim/host-keys
+for env in /etc/rcfg-sim/*.env; do
+  ip=$(basename "$env" .env)
+  key=$(sed -n 's/^HOST_KEY=//p' "$env"); key=${key:-/etc/rcfg-sim/ssh_host_rsa_key}
+  case "$key" in /etc/rcfg-sim/*)
+    [ -f "$key" ] || continue
+    sudo install -m 0600 -o rcfgsim -g rcfgsim "$key" "/opt/rcfg-sim/host-keys/$ip.key"
+    sudo sed -i "/^HOST_KEY=/d" "$env"
+    echo "HOST_KEY=/opt/rcfg-sim/host-keys/$ip.key" | sudo tee -a "$env" >/dev/null ;;
+  esac
+done
+sudo make install && sudo systemctl daemon-reload
+sudo systemctl restart 'rcfg-sim@*'
+```
+
 ### Added
 
 - **Device profiles**: a fixed behaviour per device, for reproducing the same misbehaving
@@ -37,9 +67,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   server-sent event stream). `--admin-token` (env `ADMIN_TOKEN`) requires a bearer token.
   Changes are not persisted. See [Admin API](README.md#admin-api).
 - `make build` stamps the version (`git describe`) into `rcfg-sim`; the admin API reports it.
+- **Web UI**: a new, optional binary `rcfg-sim-ui` and unit `rcfg-sim-ui.service` (not
+  enabled by `make install`). Fleet screen: instance cards with state, sessions, active
+  devices, bytes/s and drift between live config and env file; start, stop, restart and
+  rolling restart; fleet-wide active devices, response delay and per-instance session caps.
+  Failures screen: per-type fault rates, device profile rules and seed, the list of affected
+  hostnames, and presets (three built in). Every change is written to the instance env files.
+  Flags `--ui-addr`, `--ui-token`, `--env-dir`, `--admin-token`, `--gen-bin`, `--data-dir`,
+  `--poll`, `--systemctl`, `--log-level`; tokens fall back to `UI_TOKEN` and `ADMIN_TOKEN`.
+  See [Web UI](README.md#web-ui).
+- `make install-ui` / `make uninstall-ui`: the `rcfgsim-ui` user, the UI binary and unit, a
+  polkit rule letting that user start, stop and restart `rcfg-sim@*.service` only, and
+  `/etc/rcfg-sim-ui/rcfg-sim-ui.env`. `make ui-gen` and `make ui-check` rebuild and check the
+  committed templ and CSS output.
+- `rcfg-sim` reads `ADMIN_TOKEN` from the environment when `--admin-token` is not set.
+- **Web UI Activity screen**: a whole-fleet heatmap of device state with legend counts, hover
+  and a device panel (address, profile, recent events); live charts over a 10-minute window
+  (active sessions, sessions/s by outcome, bytes/s, faults/s by type), computed from each
+  instance's `/metrics` counters with counter resets handled; and a sampled event tail with
+  filters and pause. While the page is open the UI holds one event stream per instance and
+  polls `/admin/v1/devices`; with no browser on it, it holds no instance connections.
+- The UI vendors htmx-ext-sse 2.2.4 and uPlot 1.6.32 (pinned, checksums in
+  `internal/ui/web/static/VERSIONS`), served from the UI itself like everything else.
 
 ### Changed
 
+- Building from source now needs **Go 1.26 or later** (was 1.24). `go.mod` sets the floor
+  and CI tests 1.26 and 1.27. The web UI's templ dependency needs 1.26.
 - The 5-minute session cap is extended by the hang for a `hang` device, so long hangs are
   not cut short. Sessions on other devices keep the 5-minute cap.
 - The `rcfg-sim@.service` unit sets a default for every variable it uses (the flag default;
@@ -52,6 +106,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   in behaviour.
 - The "fault injection active" log line reports `rates` (e.g. `auth_fail=0.02`) in place of
   the separate `rate` and `types` fields.
+- The `rcfg-sim@.service` unit no longer puts `--admin-token` on the command line, where any
+  local user could read it with `ps`; `rcfg-sim` gets `ADMIN_TOKEN` from the env file's
+  environment instead. Reinstall the unit and `systemctl daemon-reload`.
+- `make install` sets `/etc/rcfg-sim` to `root:rcfgsim-ui 2770` and its `*.env` files to
+  `0660` group `rcfgsim-ui`, creating that group if needed (see Breaking). The README's
+  install steps match.
+- An admin API `PUT` that changes nothing (including an empty `{}`) returns the state without
+  bumping `generation`.
+- `golang.org/x/sys` is v0.48.0 (was v0.38.0), the version the UI's templ dependency needs.
+- Web UI Apply: a down instance's env file is now written with the change ("applies on next
+  start") instead of being left on old settings, and an instance that accepts part of a change
+  (faults but not profiles) has exactly the accepted settings written to its env file.
+- Web UI active devices: the fleet target is split across down instances too, by their
+  `PORT_COUNT`, and a down instance's share is written to its `ACTIVE_DEVICES`.
 
 ## [0.0.5] — 2026-09-27
 

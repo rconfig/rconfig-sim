@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Status** | Phase 1 implemented, in review. Phases 2 to 5 not started |
+| **Status** | Phases 1 and 2 committed (`ceaea5d`). Phases 3 and 4 implemented, uncommitted. Phase 5 item 0 done; rest of Phase 5 unblocked by the 7.5 rewrite. Open items in [section 17](#17-tracked-follow-ups) |
 | **Tracking** | [RCO-1901](https://linear.app/rconfig/issue/RCO-1901/simulator-web-control-ui-for-rconfig-sim-rcfg-sim-ui) |
 | **Branch** | `rco-1901-simulator-web-control-ui-for-rconfig-sim-rcfg-sim-ui` |
 | **Baseline** | Must contain `f55abe2` (device profiles, RCO-1693). Cut from `origin/dev` (`75ffb93`) or later |
@@ -35,6 +35,7 @@
 14. [Phases](#14-phases)
 15. [Open questions](#15-open-questions)
 16. [Prompt template for coding agents](#16-prompt-template-for-coding-agents)
+17. [Tracked follow-ups](#17-tracked-follow-ups)
 
 ---
 
@@ -51,6 +52,7 @@ Rules for anyone (human or agent) working from this document:
 - Follow [CLAUDE.md](../CLAUDE.md). Everything there still applies, especially the breaking-change surface and the CHANGELOG rules.
 - **Do not commit, push or create branches.** Git is managed by the maintainer.
 - **Do not use git worktrees.**
+- **Never run `sudo` or anything that changes the host outside the repo** (system users, `/etc`, systemd units, polkit). Use temp directories and the injectable `--systemctl`. Do not stop or signal processes you did not start.
 - **Run only localised tests** for the packages you changed (for example `go test ./internal/fault/...`). Do not run the full suite; the maintainer runs it.
 - **No browser-driven test frameworks.** No Playwright, Cypress or Selenium. UI behaviour is tested in Go with `httptest` and template render tests (see [section 12](#12-testing-strategy)).
 - Do not start the next phase. Stop at the end of the phase you were given and report what changed.
@@ -188,7 +190,7 @@ internal/admin          (new) /admin/v1/* handlers on the metrics mux.
 | Presets | Controller | Durable | `/var/lib/rcfg-sim-ui/presets/*.json` |
 | Build jobs | Controller | Until controller restart | Job log on disk |
 
-**Drift.** On every poll the controller compares each instance's live config (from `/admin/v1/state`) with its env file. A mismatch is shown as a drift badge on the instance card with a "re-apply" action. This catches manual edits and failed writes.
+**Drift.** On every poll the controller compares each instance's live config (from `/admin/v1/state`) with its env file. A mismatch is shown as a drift badge on the instance card with a "re-apply" action. Re-apply always pushes the **env file to the instance**: the file is the durable source of truth. This catches manual edits and failed writes.
 
 ### 5.4 Fleet-wide versus per-instance changes
 
@@ -199,13 +201,20 @@ The UI works at fleet level by default. The controller turns a fleet change into
 - Active devices: the fleet target is split across instances in proportion to each instance's device count, rounded so the total is exact.
 - Profile percentages stay fleet-correct because selection is by seed and hostname, not by instance (see `internal/profile`).
 
-Apply order is parallel with a short timeout per instance. The result screen lists any instance that failed, and the env file is only updated for instances that accepted the change.
+Apply order is parallel with a short timeout per instance. The result screen lists any instance that failed.
+
+- **Up instances**: the env file is updated with **exactly the keys each instance accepted**. If faults are accepted and profiles are rejected, the fault keys are written and the profile keys are not.
+- **Down instances**: the env file is written anyway, and the result screen marks the instance "applies on next start". Otherwise a stopped instance would come back on old settings with no drift to show for it.
+- **Admin API off, token rejected, bad env file, port clash**: skipped and listed. Nothing is written.
+- **Active devices**: the fleet target is split across up **and** down instances, using `PORT_COUNT` from the env file for down instances, so a down instance's `ACTIVE_DEVICES` is saved for its next start.
 
 ---
 
 ## 6. Admin API (inside `rcfg-sim`)
 
-Enabled by `--admin` (default `false`). Mounted on the `--metrics-addr` mux under `/admin/v1/`. If `--admin-token` is set, every admin request must carry `Authorization: Bearer <token>`; `/metrics` and `/healthz` are unaffected. All bodies are JSON. Errors return `4xx` with `{"error": "..."}`. Every successful `PUT` returns the full new state and bumps `generation`.
+Enabled by `--admin` (default `false`). Mounted on the `--metrics-addr` mux under `/admin/v1/`. If `--admin-token` is set, every admin request must carry `Authorization: Bearer <token>`; `/metrics` and `/healthz` are unaffected. All bodies are JSON. Errors return `4xx` with `{"error": "..."}`. Unknown JSON fields are rejected with `400`, and bodies over 64 KB are refused. Every successful `PUT` that changes something returns the full new state and bumps `generation`. A `PUT` that changes nothing (including an empty `{}`) returns the state without bumping `generation`.
+
+`version` comes from `-X main.version` set by `make build` (`git describe`), falling back to Go build info and then `dev`.
 
 ### `GET /admin/v1/state`
 
@@ -235,11 +244,11 @@ Body: the `faults` object above. Missing types mean `0`. Each rate must be in `[
 
 ### `PUT /admin/v1/profiles`
 
-Body: `{"seed": 42, "rules": ["hang:3600s@3%"]}`. Rebuilds the port-to-profile map off the hot path, then swaps. Manifest-pinned profiles (11th column) still win, as today.
+Body: `{"seed": 42, "rules": ["hang:3600s@3%"]}`. `rules` is required (`[]` clears all rules); `seed` is optional and keeps the current seed when left out. Each string is one rule; all are parsed together with `profile.Parse`, so the 100% total is enforced. State reports the rules exactly as given. Rebuilds the port-to-profile map off the hot path, then swaps. Manifest-pinned profiles (11th column) still win, as today.
 
 ### `PUT /admin/v1/behaviour`
 
-Body: `{"delay_ms": {"min": 50, "max": 500}, "max_sessions": 5000}`. Either key may be omitted. `min <= max`, `max_sessions >= 1`.
+Body: `{"delay_ms": {"min": 50, "max": 500}, "max_sessions": 5000}`. Either key may be omitted, but `delay_ms` must carry both `min` and `max`. `0 <= min <= max <= 3600000`, `max_sessions >= 1`.
 
 ### `PUT /admin/v1/active`
 
@@ -263,7 +272,7 @@ Server-sent events. Each `data:` line is one JSON event:
 { "t": 1761814800123, "host": "rtr-00042", "port": 10042, "kind": "session_end", "outcome": "auth_fail", "fault": "auth_fail", "bytes": 0, "ms": 412 }
 ```
 
-`kind` is one of `session_start`, `session_end`, `fault`. `sample` is a probability in `(0,1]`, default `0.01`, capped by the instance at a maximum event rate (default 200 per second) so a 50k burst cannot flood the controller. Dropped events are counted and reported in a periodic `{"kind":"dropped","n":123}` event.
+`kind` is one of `session_start`, `session_end`, `fault`. `bytes` is bytes sent so far and `ms` is time since session start, for every kind. On `session_end`, `fault` is the session's last fault. `sample` is a probability in `(0,1]`, default `0.01`. Each stream (subscriber) is capped at 200 events per second so a 50k burst cannot flood the controller; the controller holds one stream per instance. Dropped events are counted and reported once a second as `{"kind":"dropped","n":123}`. The instance also keeps a ring of recent events (`Bus.Recent`), not exposed yet; Phase 4 may add an endpoint for the device side panel.
 
 ### 6.1 Device state codes
 
@@ -275,8 +284,10 @@ Server-sent events. Each `data:` line is one JSON event:
 | 3 | `disconnect` | Outcome `disconnect` |
 | 4 | `error` | Outcome `error` |
 | 5 | `hang` | Device has a `hang` profile and a session hung |
-| 6 | `inactive` | Port index at or above `active_devices` |
-| 7 | `active` | A session is in progress |
+| 6 | `inactive` | Port index at or above `active_devices` (worked out at encode time from the live count) |
+| 7 | `active` | A session is in progress. Wins over `inactive` |
+
+Connections refused by the `refuse` profile or the session cap record `error`. Connections refused because the device is inactive update `last_seen` only.
 
 ---
 
@@ -287,9 +298,9 @@ Server-sent events. Each `data:` line is one JSON event:
 | Flag | Default | Meaning |
 |---|---|---|
 | `--ui-addr` | `127.0.0.1:8080` | Listen address for the UI |
-| `--ui-token` | empty | If set, required as a cookie (set via `/login?token=`) or `Authorization: Bearer` header |
+| `--ui-token` | empty, falls back to `UI_TOKEN` env | If set, required as a cookie (set via `/login?token=`) or `Authorization: Bearer` header |
 | `--env-dir` | `/etc/rcfg-sim` | Where instance env files live; instances are discovered from `*.env` here |
-| `--admin-token` | empty | Token sent to instance admin APIs |
+| `--admin-token` | empty, falls back to `ADMIN_TOKEN` env | Token sent to instance admin APIs |
 | `--gen-bin` | `/opt/rcfg-sim/bin/rcfg-sim-gen` | Generator binary used by build jobs |
 | `--data-dir` | `/var/lib/rcfg-sim-ui` | Presets and job logs |
 | `--poll` | `2s` | Instance poll interval |
@@ -298,30 +309,81 @@ Server-sent events. Each `data:` line is one JSON event:
 
 ### 7.2 Instance discovery
 
-Each `*.env` in `--env-dir` (excluding `*.sample`) is one instance. The controller reads `LISTEN_IP`, `PORT_START`, `PORT_COUNT` and `METRICS_ADDR` from it. An instance whose `/healthz` does not answer is shown as down, with its unit state from `systemctl is-active`.
+Each `*.env` in `--env-dir` (excluding `*.sample`) is one instance. The controller reads `LISTEN_IP`, `PORT_START`, `PORT_COUNT` and `METRICS_ADDR` from it, applying the **same defaults as the systemd unit** for any key left out (`LISTEN_IP` defaults to the file name). When `METRICS_ADDR` binds `0.0.0.0` or `::`, the controller dials `127.0.0.1` on that port.
+
+Instance card states, in order of precedence:
+
+- **Bad env file**: the env file cannot be parsed, so there is no address to dial. Nothing is written to it.
+- **Port clash**: two or more instances resolve to the same metrics port (for example both left on the default `0.0.0.0:9100`). Checked before Down because a clashing port's `/healthz` may answer for the wrong instance. Shown as a fault on each affected card.
+- **Down**: `/healthz` does not answer. Unit state from `systemctl is-active`.
+- **Admin API off**: `/healthz` answers but `/admin/v1/state` returns 404. Start, stop and restart still work. The card shows the line to add (`ADMIN=true`) and the restart needed. The controller does not edit `ADMIN` itself.
+- **Token rejected**: `/admin/v1/state` returns 401.
+- **Up**.
 
 ### 7.3 Env file handling
 
 - The controller **only rewrites keys it owns**: `FAULT_RATES`, `DEVICE_PROFILES`, `PROFILE_SEED`, `RESPONSE_DELAY_MS_MIN`, `RESPONSE_DELAY_MS_MAX`, `MAX_CONCURRENT_SESSIONS`, `ACTIVE_DEVICES`. Comments, ordering and every other line are preserved.
-- When writing `FAULT_RATES`, it clears `FAULT_RATE` and `FAULT_TYPES` (D5 makes setting both an error).
-- Writes are atomic: temp file in the same directory, `fsync`, rename.
+- When writing `FAULT_RATES`, it sets `FAULT_RATE=0` and `FAULT_TYPES=` (empty). `FAULT_RATE` cannot be empty because it must parse as a number. D5 makes a non-zero legacy rate alongside `FAULT_RATES` an error.
+- `make install` creates the `rcfgsim-ui` group (the setgid layout needs it). `make install-ui` creates the user.
+- Writes are atomic: temp file in the same directory, `fsync`, rename. The temp file takes the original file's mode and group before the rename.
+
+**Permissions.** systemd reads `EnvironmentFile=` as root before the service starts, so device processes need **no** access to `/etc/rcfg-sim`. The layout is:
+
+| Path | Owner | Mode |
+|---|---|---|
+| `/etc/rcfg-sim/` | `root:rcfgsim-ui` | `2770` (setgid, so new files get group `rcfgsim-ui`) |
+| `/etc/rcfg-sim/*.env` | `root:rcfgsim-ui` at install, `rcfgsim-ui:rcfgsim-ui` after the first UI write | `0660` |
+| `/opt/rcfg-sim/host-keys/` | `rcfgsim:rcfgsim` | `0700` (unchanged) |
+
+Device processes (user `rcfgsim`) cannot read or write env files, which also keeps `ADMIN_TOKEN` away from them. Installs without the UI keep the same layout with group `rcfgsim-ui` simply unused.
 
 ### 7.4 systemd control
 
-Start, stop and restart call `systemctl <verb> rcfg-sim@<IP>.service`. The controller runs as the `rcfgsim` user. Permission comes from a polkit rule shipped in `deploy/polkit/` that allows `rcfgsim` to manage units matching `rcfg-sim@*.service` and nothing else. A sudoers alternative is documented for hosts without polkit.
+Start, stop and restart call `systemctl <verb> rcfg-sim@<IP>.service`. The controller runs as its own system user, **`rcfgsim-ui`**, separate from the `rcfgsim` user the device processes run as. Permission comes from a polkit rule shipped in `deploy/polkit/` that allows `rcfgsim-ui` to manage units matching `rcfg-sim@*.service` and nothing else. A sudoers alternative is documented for hosts without polkit.
 
-A **rolling restart** restarts one instance at a time and waits for `/healthz` before moving on, with a configurable pause.
+A **rolling restart** restarts one instance at a time, waits up to 60 s for `/healthz`, pauses (default 5 s, configurable) and moves on. It stops at the first instance that fails to come back.
 
 ### 7.5 Build jobs
 
-A build runs `rcfg-sim-gen` into a staging directory, then swaps directories and does a rolling restart:
+Builds never rename or rewrite a live build. Each build lives in its own directory and a symlink says which one is live.
 
-1. Validate: `count <= ip_count x devices_per_ip` for the **existing** IP layout. A layout change (more IPs) is refused with the exact `deploy/ip-aliases.sh` and env-file steps needed, because adding aliases needs root.
-2. Estimate disk and RAM from per-model average sizes before running, and refuse if free space on the target filesystem is below the estimate plus 10%.
-3. Generate into `configs.new` and `manifest.csv.new`.
-4. Rename `configs` to `configs.prev`, `configs.new` to `configs`, same for the manifest. Running instances keep their existing mmaps, which stay valid after the rename.
-5. Rolling restart.
-6. Keep `configs.prev` until the next successful build, so a rollback is a rename.
+**Data layout (UI-managed installs only):**
+
+```
+/opt/rcfg-sim/data/                      root:rcfgsim-ui 2775
+├── current -> builds/20261031-0915      symlink, swapped atomically
+└── builds/
+    ├── 20261031-0915/                   live build
+    │   ├── configs/
+    │   ├── manifest.csv                 config_file paths point into this directory
+    │   └── build.json                   the settings this build was made with
+    └── 20261030-1640/                   previous build, kept for rollback
+```
+
+Instances run with `MANIFEST=/opt/rcfg-sim/data/current/manifest.csv`. The generator runs with `--output-dir` set to the build's own absolute directory, so the paths it writes into the manifest stay valid for the life of the build. Nothing is ever renamed, so manifest paths never need rewriting. Running instances keep their mmaps of the old build until they restart.
+
+The controller unit adds `/opt/rcfg-sim/data` to `ReadWritePaths=`. It never gets write access to the rest of `/opt/rcfg-sim`, so it cannot replace the simulator binaries. Build output must be readable by `rcfgsim` (files `0644`, directories `0755`), whatever the controller's own `UMask=`.
+
+**Legacy installs are untouched.** The unit's `MANIFEST` and the generator's `--output-dir` defaults do not change, so this is not a breaking change. The Build screen only works when every instance's `MANIFEST` points at `data/current/manifest.csv`. Otherwise it shows the one-off adoption steps (`make adopt-data`, run by the operator with sudo), which:
+
+1. create `/opt/rcfg-sim/data/builds/<timestamp>/`,
+2. move the existing `configs/` and `manifest.csv` into it,
+3. rewrite the `config_file` prefix in that one manifest (a one-off migration, never done by the controller),
+4. write a `build.json` marked `"adopted": true` with whatever settings are known,
+5. point `current` at it and set `MANIFEST` in every env file.
+
+**A build:**
+
+1. **Validate the layout.** The existing instances must be a layout the generator can reproduce: consecutive IPs, and the same `PORT_START`, `PORT_COUNT` and `MANIFEST` on every instance. Otherwise refuse with the reason.
+2. **Validate the count.** Every instance must get at least one device: `(ip_count - 1) x devices_per_ip < count <= ip_count x devices_per_ip`. The generator fills IPs in order, and an instance with no devices refuses to start. Shrinking the fleet is what the active-devices slider is for; the Build screen says so beside the count field. A count needing more IPs is refused with the exact `deploy/ip-aliases.sh` and env-file steps.
+3. **Settings.** Start from the live build's `build.json`, so options the UI does not expose (for example `--rne-dual-home-pct`) carry over. Credentials (username, password, enable password) are reused from the live manifest. An adopted build with unknown settings uses generator defaults, and the Build screen says so.
+4. **Estimate** disk and RAM from per-model average sizes (the README size table for the Cisco buckets, a measured sample for TL1 models). Refuse if free space is below the estimate plus 10%.
+5. **Generate** into `builds/<timestamp>/`. A failed run deletes that directory and leaves `current` alone.
+6. **Swap** `current` atomically (create a temp symlink, then rename it over `current`).
+7. **Rolling restart** (7.4). If it stops on a failure, the job offers rollback.
+8. **Retention.** Keep the live build and the one before it. Delete older builds only after a successful build and restart. The disk check in step 4 assumes two builds on disk.
+
+**Rollback** points `current` at the previous build and does a rolling restart.
 
 Job progress (generator output, restart steps) streams to the browser over SSE.
 
@@ -334,9 +396,10 @@ The UI has no login by design. It is still a control plane that can stop the fle
 - **Off unless installed and started.** `rcfg-sim-ui` is a separate unit, not enabled by `make install` unless asked (`make install-ui`).
 - **Loopback by default.** `--ui-addr=127.0.0.1:8080`. Remote use is via SSH tunnel, or by setting the address deliberately.
 - **Optional token** (`--ui-token`, `--admin-token`) for shared lab networks. Compared in constant time.
+- **Tokens never go on a command line.** Command lines are world-readable via `ps` and `/proc/<pid>/cmdline`. Both binaries read the token from the environment (`ADMIN_TOKEN`, `UI_TOKEN`) when the flag is not set, and the systemd units pass it only through `EnvironmentFile=`, never in `ExecStart`. Env file permissions are in section 7.3; device processes cannot read them.
 - **Admin API off by default** in `rcfg-sim` (`--admin=false`).
 - **CSRF**: all state-changing requests are `PUT`/`POST` from HTMX with a custom header (`HX-Request`) checked server-side, and `SameSite=Strict` on the token cookie.
-- **Narrow privilege**: the polkit rule allows `rcfg-sim@*.service` only. The controller never runs as root and never edits IP aliases.
+- **Narrow privilege**: the controller runs as `rcfgsim-ui`, the device processes as `rcfgsim`, and neither can do the other's job. The polkit rule allows `rcfg-sim@*.service` only. The controller never runs as root and never edits IP aliases.
 - **Input validation** on every field server-side. The UI's own validation is a convenience only.
 - A startup log line warns if `--ui-addr` is not loopback and no token is set.
 
@@ -418,30 +481,40 @@ Navigation: a left rail with **Fleet**, **Failures**, **Activity**, **Build**, a
 
 ### 10.1 Fleet (service control)
 
-- One card per instance: IP, port range, unit state, active sessions against cap, bytes/s sparkline, generation, drift badge.
+- One card per instance: IP, port range, card state (7.2), active sessions against cap, bytes/s sparkline (from `rcfgsim_bytes_sent_total` on the instance's `/metrics`, differenced per poll), generation, drift badge.
 - Actions per instance and fleet-wide: start, stop, restart, rolling restart.
 - **Active devices**: slider plus numeric input, fleet total, with per-instance split shown.
-- **Response delay**: dual-handle range slider (min/max ms) plus inputs.
+- **Response delay**: a min slider and a max slider, each with a numeric input, kept so min never exceeds max.
 - **Session cap**: per-instance input, fleet total shown.
 
 ### 10.2 Failures
 
 - **Fault rates**: one row per type (`auth_fail`, `disconnect_mid`, `slow_response`, `malformed`), each with a slider (0 to 10% by default, extendable to 100%), a numeric input, and a live estimate: "about N events per full poll of the fleet".
 - **Device profiles**: rows of type, parameters, percent of fleet; seed input. A "who is affected" panel lists the hostnames the seed selects (from `/admin/v1/state` plus the manifest), with copy-to-clipboard so the list can be checked against rConfig's error logs.
-- **Presets**: save the current faults and profiles under a name; apply a preset in one click. Ships with three: "Flaky WAN", "Auth storm", "Slow core".
+- **Presets**: save the current faults and profiles under a name; apply a preset in one click. Ships with three read-only presets, embedded in the binary. Saved presets go to `--data-dir/presets/`.
+
+| Preset | Fault rates | Device profiles (seed 42) |
+|---|---|---|
+| Flaky WAN | `disconnect_mid=0.03`, `slow_response=0.05` | `latency:300-1500ms@15%` |
+| Auth storm | `auth_fail=0.15` | none |
+| Slow core | `slow_response=0.02` | `latency:2000-8000ms@5%`, `hang:600s@1%` |
+
+Values are starting points; tune them in review.
 - Nothing applies until **Apply** is pressed. The pending bar shows a diff of what will change.
 
 ### 10.3 Activity
 
-- **Heatmap**: every device as one cell on a canvas, coloured by state code (6.1). 50,000 cells fit as a 250 x 200 grid. Hover shows hostname, state and last seen; click opens a side panel with that device's profile and its recent events.
-- **Live charts** (uPlot, 10-minute window): active sessions, sessions per second by outcome, bytes per second, faults per second by type.
+- **Heatmap**: every device as one cell on a canvas, coloured by state code (6.1), plus a controller-only value `255` ("unreachable") for cells of an instance that is not reporting. 50,000 cells fit as a 250 x 200 grid. The fleet frame is rebuilt every 2 s (fixed, not a flag). The page shows each frame's draw time beside the heatmap. Hover shows hostname, state and last seen; click opens a side panel with that device's profile and its recent events.
+- **Event source**: the controller subscribes to each instance with `sample=1` and relies on the instance's 200/s per-stream cap, then caps each browser at 200/s. The device side panel reads the controller's own ring of the last 5,000 events; no instance endpoint for `Bus.Recent` was added.
+- **Live charts** (uPlot, 10-minute window, one point per `--poll`): active sessions, sessions per second by outcome, bytes per second, faults per second by type.
 - **Event tail**: sampled events, filter by hostname, outcome or fault, pause button.
 
 ### 10.4 Build
 
 - Inputs: device count, seed, distribution editor (stacked weight bars across `sm` to `6xl` and the TL1 models, must total 100).
 - Estimate panel: disk and RAM, time estimate, and a warning if the count needs more IPs than are configured.
-- Run: job log streaming, then rolling restart progress per instance. Rollback button while `configs.prev` exists.
+- Run: job log streaming, then rolling restart progress per instance. Rollback button while a previous build exists.
+- If the install is not adopted (7.5), the screen shows the adoption steps instead of the form.
 
 ---
 
@@ -474,8 +547,8 @@ docs/UI-ARCHITECTURE.md              this document
 
 | Tool | Use | Pinned how |
 |---|---|---|
-| Go 1.24+ | Everything | `go.mod` |
-| `templ` CLI | `templ generate` | Version in `Makefile`, run via `go run github.com/a-h/templ/cmd/templ@<version>` |
+| Go 1.26+ | Everything | `go.mod` (`go 1.26.0`). CI tests 1.26 and 1.27 |
+| `templ` CLI and runtime | `templ generate` | Version in `Makefile`, run via `go run github.com/a-h/templ/cmd/templ@<version>`. Currently v0.3.1100. Pin the newest templ release whose `go` line is no higher than the `go` line in this repo's `go.mod`. **Never raise `go.mod` to suit templ**; a floor change is a maintainer decision |
 | Tailwind v4 standalone CLI | Build `static/app.css` | Version and SHA-256 in `Makefile`; downloaded to `.tools/` |
 | htmx, htmx-ext-sse, uPlot | Front end | Vendored files with version in filename and a `VERSIONS` file |
 
@@ -541,10 +614,14 @@ Everything below becomes public API under [CLAUDE.md](../CLAUDE.md) and needs RE
 | HTTP | `/admin/v1/*` | off | 2 |
 | Binary | `rcfg-sim-ui` and its flags (7.1) | n/a | 3 |
 | Unit | `rcfg-sim-ui.service` | not enabled | 3 |
+| Env file | `/etc/rcfg-sim-ui/rcfg-sim-ui.env`: `UI_ADDR`, `ENV_DIR`, `GEN_BIN`, `DATA_DIR`, `POLL`, `SYSTEMCTL`, `LOG_LEVEL`, `UI_TOKEN`, `ADMIN_TOKEN` | see sample | 3 |
+| System user | `rcfgsim-ui` (group created by `make install`, user by `make install-ui`) | n/a | 3 |
+| Makefile | `install-ui`, `uninstall-ui`, `ui-gen`, `ui-check` | n/a | 3 |
+| **Breaking** | Unit `HOST_KEY` default moves to `/opt/rcfg-sim/host-keys/%i.key`; `/etc/rcfg-sim` becomes `root:rcfgsim-ui 2770` and is no longer writable by `rcfgsim` | n/a | 3 |
 
 No existing flag, metric name or label changes. No new Prometheus labels; the device state and events are exposed via the admin API, not `/metrics`, to keep cardinality bounded.
 
-All of this is additive, so under the pre-1.0 rules each phase is a patch bump.
+Phases 1 and 2 are additive. Phase 3 has a breaking change (the host-key default and `/etc/rcfg-sim` permissions), recorded under `### Breaking` with a `#### Migration` snippet, which pre-1.0 allows in a patch or minor bump. Phase 3 also moves `golang.org/x/sys` from v0.38 to v0.48 (pulled in by templ); `rcfg-sim` links it, so note it in the CHANGELOG.
 
 ---
 
@@ -614,6 +691,11 @@ Each phase ends in a working, mergeable state. Do not start a phase until the pr
 
 **Scope.**
 
+0. **Phase 2 follow-ups, do first:**
+   - `rcfg-sim` reads `ADMIN_TOKEN` from the environment when `--admin-token` is unset. Remove `--admin-token` from the unit's `ExecStart` (section 8). Update README, env sample and CHANGELOG.
+   - A `PUT` that changes nothing no longer bumps `generation` (section 6). Add a test.
+   - Permissions per section 7.3. `make install` and the README agree: `/etc/rcfg-sim` is `root:rcfgsim-ui 2770`, env files `0660`. `make install-ui` creates the `rcfgsim-ui` user. Fix the Makefile step that chowns `/etc/rcfg-sim` to `rcfgsim`.
+   - The unit's `HOST_KEY` default becomes `/opt/rcfg-sim/host-keys/%i.key` (the README's recommended path) and `/etc/rcfg-sim` is removed from `ReadWritePaths=`. Anyone relying on the old `--host-key` default under `/etc/rcfg-sim` must move the key: record under `### Breaking` with a `#### Migration` snippet.
 1. `cmd/rcfg-sim-ui` with the flags in 7.1.
 2. `internal/ui/fleet`: discovery from env files, polling `/healthz` and `/admin/v1/state`, fan-out of changes (5.4), drift detection (5.3).
 3. `internal/ui/envfile`: as 7.3.
@@ -643,6 +725,8 @@ Each phase ends in a working, mergeable state. Do not start a phase until the pr
 
 **Scope.**
 
+0. **Phase 3 follow-ups, do first** (section 5.4): write the env file for down instances ("applies on next start"), and on a partial Apply write exactly the keys each instance accepted. Add tests for both.
+0. **Then:** vendor htmx-ext-sse and uPlot at pinned versions (add to `VERSIONS`; the same-origin CSP already covers them), as section 11.2 requires.
 1. Controller SSE hub: one upstream SSE connection per instance to `/admin/v1/events`, merged and fanned out to browsers. One shared poller for `/admin/v1/devices`, assembling a fleet frame every 2 seconds.
 2. Rates for charts computed in the controller by scraping each instance's `/metrics` on the poll interval and differencing counters. No Prometheus server required.
 3. Activity screen (10.3): canvas heatmap with legend counts, hover and click panel; uPlot charts; event tail with filters and pause.
@@ -663,18 +747,25 @@ Each phase ends in a working, mergeable state. Do not start a phase until the pr
 
 **Goal.** Change device count, distribution and seed from the UI safely.
 
-**Scope.** Section 7.5 in full: validation against the current IP layout, disk and RAM estimate, staged generation, directory swap, rolling restart, rollback, streamed job log. Build screen (10.4).
+**Scope.**
+
+0. **Phase 4 follow-up, do first** (section 5.4): include down instances in the active-device split, using `PORT_COUNT` from their env files, and write their `ACTIVE_DEVICES`. Add a test.
+
+Then section 7.5 in full: the `data/` layout and symlink swap, `make adopt-data`, layout and count validation, `build.json` carry-over, disk and RAM estimate, generation, rolling restart, rollback, retention, streamed job log. Build screen (10.4). Add `/opt/rcfg-sim/data` to the controller unit's `ReadWritePaths=`.
 
 **Out of scope.** Adding IP aliases or new instances (the UI shows the steps instead).
 
 **Acceptance criteria.**
 
 - A build that fits the current layout completes, the fleet comes back on the new manifest, and the previous build can be rolled back.
+- A count that would leave an instance with no devices is refused before anything is written.
+- A legacy (not adopted) install shows the adoption steps and builds nothing.
+- Unit defaults and generator defaults are unchanged (no breaking change).
 - A build that does not fit is refused before anything is written, with the exact manual steps shown.
 - A build with insufficient disk is refused before generation starts.
 - A failed generator run leaves the live configs untouched.
 
-**Tests.** `jobs` tests with a fake generator binary and fake `systemctl`, estimate tests, swap and rollback tests on a temp directory.
+**Tests.** `jobs` tests with a fake generator binary and fake `systemctl`, estimate tests, symlink swap, rollback and retention tests on a temp directory, count-bounds tests, and a test for the adoption script against scratch files (never against `/opt`).
 
 ---
 
@@ -690,8 +781,9 @@ Not started until phases 1 to 5 are in use and the need is confirmed. Design to 
 
 1. **SLA-target mode**: worth building? Decide after phase 5.
 2. **Logo SVGs**: the logo files in both repos use gradient stops `#7C3411`, `#CC785C`, `#F2C7A8`, while the docs CSS uses the Brand Guidelines 2026 values `#8C4220`, `#CC7A5C`, `#F2C6A2`. The UI uses the guideline values for CSS and the logo files as they are. Should the logo SVGs be updated to match?
-3. **Docs claim**: simdocs says the project depends on three external libraries. After phase 3 that is true for `rcfg-sim` only. Reword on the docs site at phase 3.
-4. **Milestone**: tracked under rConfig V8 8.4.2 for now; rcfg-sim versions separately (0.0.x).
+3. **Docs claim**: simdocs says the project depends on three external libraries. After phase 3 that is true for `rcfg-sim` only. Reword on the docs site now that Phase 3 has landed.
+4. **Go floor**: resolved. The maintainer raised the floor to Go 1.26; CI and the README match.
+5. **Milestone**: tracked under rConfig V8 8.4.2 for now; rcfg-sim versions separately (0.0.x).
 
 ---
 
@@ -709,6 +801,7 @@ specified. Do not start any other phase.
 Rules:
 - Do not commit, push or create branches.
 - Do not use git worktrees.
+- Never run sudo or change anything on the host outside the repo.
 - Run only localised tests for the packages you change, for example
   go test ./internal/fault/... Do not run the full test suite.
 - No browser-driven test frameworks (no Playwright, Cypress or Selenium).
@@ -719,5 +812,51 @@ Rules:
   guessing.
 
 When done, report: files changed, public API added, tests run and their
-results, and anything in the document that needs updating.
+results, anything in the document that needs updating, and new items for
+section 17 (manual checks, simdocs pages, follow-ups).
 ```
+
+---
+
+## 17. Tracked follow-ups
+
+The running list of open items across all phases. Update it at the end of every phase. Agents add items here in their report; the maintainer ticks them off.
+
+### Maintainer: git and review
+
+- [ ] Commit Phase 3, Phase 4 and Phase 5 item 0 (all uncommitted as of the Phase 5 item 0 report). Commit before the rest of Phase 5.
+- [ ] Check the dev host after the Phase 3 `sudo` incident: nothing new under `/etc`, no new units or polkit rules.
+- [ ] Run the full test suite after Phases 3 and 4.
+
+### Maintainer: manual checks agents cannot do
+
+- [ ] Themes (Phase 3): Dark, Light and Auto. Logo swaps, gradient hairline on the header, copper buttons readable in both.
+- [ ] Heatmap frame time (Phase 4): read the draw time shown beside the heatmap with a 50,000-device frame. Target under 16 ms.
+- [ ] Polkit rule on a real lab host with the `rcfgsim-ui` user: start, stop and restart work for `rcfg-sim@<IP>.service` and nothing else.
+- [ ] Host-key migration snippet run on a real install before release.
+- [ ] `make adopt-data` run on a real install (copy of production layout) before release.
+
+### Code follow-ups
+
+- [x] Active-device split includes down instances (Phase 5 item 0).
+
+### simdocs ([rconfig-sim-docs](https://github.com/rconfig/rconfig-sim-docs))
+
+- [ ] Requirements: Go 1.26+.
+- [ ] CLI reference, `rcfg-sim`: `--fault-rates`, `--active-devices` (P1), `--admin`, `--admin-token` and its `ADMIN_TOKEN` fallback (P2, P3).
+- [ ] CLI reference: new `rcfg-sim-ui` binary and its flags, with `UI_TOKEN` and `ADMIN_TOKEN` fallbacks (P3).
+- [ ] Install and env-file pages: `FAULT_RATES`, `ACTIVE_DEVICES`, `DEVICE_PROFILES`, `PROFILE_SEED`, `SSH_AUTH`, `COMMANDS_ROOT`, `MAX_SESSION` (P1); `ADMIN`, `ADMIN_TOKEN` (P2); unit defaults now apply to keys left out (P1).
+- [ ] Install pages: `/etc/rcfg-sim` permissions, the `rcfgsim-ui` group and user, `make install-ui`, the new host-key default and its migration (P3).
+- [ ] Fault injection page: per-type rates, `FAULT_RATE=0` alongside `FAULT_RATES`, link to runtime changes over the API (P1, P2).
+- [ ] Active devices: new section matching the README (P1).
+- [ ] New Admin API page matching the README, including "a PUT that changes nothing does not bump `generation`" (P2, P3).
+- [ ] New Web UI page: Fleet, Failures, Activity, presets, and Apply behaviour (down instances apply on next start, partial apply) (P3, P4).
+- [ ] Reword the "three external libraries" claim: true for `rcfg-sim` only (P3).
+- [ ] Web UI page: the active-devices split includes down instances (weighted by `PORT_COUNT`) and saves their share for next start (P5).
+- [ ] Build screen, the `data/` layout, `make adopt-data`, rollback and retention (after P5).
+
+### Decisions pending
+
+- [ ] Logo SVG gradient stops versus Brand Guidelines 2026 (section 15, Q2).
+- [ ] SLA-target mode, after Phase 5 (section 15, Q1).
+- [ ] Linear milestone: RCO-1901 sits in rConfig V8 8.4.2 (target 30 November); move if the work runs past it.

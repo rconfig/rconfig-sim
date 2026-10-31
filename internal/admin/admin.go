@@ -186,15 +186,19 @@ func (h *handler) getState(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, h.state(h.inst.Runtime().Load()))
 }
 
-// update applies fn through Holder.Update and answers with the new state, or
-// a 400 carrying fn's error.
+// update applies fn through Holder.Update and answers with the resulting
+// state (generation unchanged if fn changed nothing), or a 400 carrying fn's
+// error.
 func (h *handler) update(w http.ResponseWriter, what string, fn func(*runtime.Live) error) {
+	before := h.inst.Runtime().Load().Generation
 	live, err := h.inst.Runtime().Update(fn)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h.opt.Logger.Info("admin change applied", "change", what, "generation", live.Generation)
+	if live.Generation != before {
+		h.opt.Logger.Info("admin change applied", "change", what, "generation", live.Generation)
+	}
 	writeJSON(w, http.StatusOK, h.state(live))
 }
 

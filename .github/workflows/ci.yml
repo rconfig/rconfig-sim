@@ -16,9 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # go.mod (and x/crypto, x/sys) require Go 1.24, so 1.24 is the floor.
-        # Older versions can't build this module. Add each new Go release here.
-        go: ['1.24', '1.25', '1.26', '1.27']
+        # go.mod sets Go 1.26 as the floor (the templ release the UI uses needs
+        # it). Older versions can't build this module. Add each new Go release here.
+        go: ['1.26', '1.27']
     env:
       # Without this, Go silently downloads a newer toolchain when go.mod asks
       # for one, so a matrix entry could end up testing a different Go version.
@@ -59,3 +59,28 @@ jobs:
 
       - name: go build
         run: go build ./...
+
+  ui:
+    # The web UI's committed generated files (templ Go code, built CSS) must
+    # match their sources, and the simulator binaries must not link the UI
+    # (docs/UI-ARCHITECTURE.md 11.4, 12.4). No Node, no browsers: make
+    # ui-check fetches the checksum-pinned Tailwind standalone CLI.
+    name: ui (generated files, import boundary)
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: make ui-check
+        run: make ui-check
+
+      - name: Import boundary
+        run: go test -count=1 -run TestImportBoundary ./cmd/rcfg-sim/

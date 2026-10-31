@@ -9,6 +9,8 @@
 package runtime
 
 import (
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,15 +90,44 @@ func (h *Holder) Store(l *Live) *Live {
 // Update applies fn to a copy of the current Live and stores the result as
 // the next generation, holding the store lock throughout, so concurrent
 // Updates to different fields all survive. If fn returns an error nothing is
-// stored and Update returns that error. fn must not call Store or Update.
+// stored and Update returns that error. If fn changes nothing (see Equal),
+// nothing is stored and Update returns the current Live, generation
+// unchanged. fn must not call Store or Update.
 func (h *Holder) Update(fn func(*Live) error) (*Live, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	next := h.cur.Load().Clone()
+	cur := h.cur.Load()
+	next := cur.Clone()
 	if err := fn(next); err != nil {
 		return nil, err
 	}
+	if cur != nil && next.Equal(cur) {
+		return cur, nil
+	}
 	return h.storeLocked(next), nil
+}
+
+// Equal reports whether l and o hold the same config, ignoring Generation.
+// Fault sets compare by rates (nil equals a Set with every rate 0) and
+// profile maps by each device's profile value.
+func (l *Live) Equal(o *Live) bool {
+	if l == nil || o == nil {
+		return l == o
+	}
+	var lf, of fault.Set
+	if l.Faults != nil {
+		lf = *l.Faults
+	}
+	if o.Faults != nil {
+		of = *o.Faults
+	}
+	return lf == of &&
+		l.DelayMin == o.DelayMin && l.DelayMax == o.DelayMax &&
+		l.MaxSessions == o.MaxSessions && l.ActiveDevices == o.ActiveDevices &&
+		l.ProfileSeed == o.ProfileSeed && slices.Equal(l.ProfileRules, o.ProfileRules) &&
+		maps.EqualFunc(l.Profiles, o.Profiles, func(a, b *profile.Profile) bool {
+			return a == b || (a != nil && b != nil && *a == *b)
+		})
 }
 
 // storeLocked publishes next with the following generation. h.mu must be held.

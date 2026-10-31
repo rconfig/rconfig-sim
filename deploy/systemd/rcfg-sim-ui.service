@@ -1,0 +1,65 @@
+[Unit]
+Description=rConfig SSH simulator web UI (rcfg-sim-ui)
+Documentation=file:///opt/rcfg-sim/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Its own user, separate from the device processes (rcfgsim). The group may
+# write /etc/rcfg-sim; see docs/UI-ARCHITECTURE.md 7.3 and `make install-ui`.
+User=rcfgsim-ui
+Group=rcfgsim-ui
+
+# Defaults for every variable ExecStart uses, matching the rcfg-sim-ui flag
+# defaults. Override them in the env file below.
+Environment=UI_ADDR=127.0.0.1:8080
+Environment=ENV_DIR=/etc/rcfg-sim
+Environment=GEN_BIN=/opt/rcfg-sim/bin/rcfg-sim-gen
+Environment=DATA_DIR=/var/lib/rcfg-sim-ui
+Environment=POLL=2s
+Environment=SYSTEMCTL=systemctl
+Environment=LOG_LEVEL=info
+
+# UI_TOKEN and ADMIN_TOKEN reach rcfg-sim-ui only as environment variables
+# from this file, never on the command line (visible in ps). Optional ("-").
+EnvironmentFile=-/etc/rcfg-sim-ui/rcfg-sim-ui.env
+
+ExecStart=/opt/rcfg-sim/bin/rcfg-sim-ui \
+    --ui-addr=${UI_ADDR} \
+    --env-dir=${ENV_DIR} \
+    --gen-bin=${GEN_BIN} \
+    --data-dir=${DATA_DIR} \
+    --poll=${POLL} \
+    --systemctl=${SYSTEMCTL} \
+    --log-level=${LOG_LEVEL}
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rcfg-sim-ui
+
+# Presets and job logs. systemd creates /var/lib/rcfg-sim-ui for the user.
+StateDirectory=rcfg-sim-ui
+StateDirectoryMode=0750
+# New env files and temp files stay group-writable for rcfgsim-ui only.
+UMask=0007
+
+# Sandboxing. Writes only its state directory and /etc/rcfg-sim. Unit control
+# goes to systemd over D-Bus and is authorised by the polkit rule, so no
+# privilege escalation is needed. Hosts using the sudoers alternative must
+# set NoNewPrivileges=false in a drop-in (see the README).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/rcfg-sim
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

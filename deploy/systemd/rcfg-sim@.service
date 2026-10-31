@@ -15,14 +15,15 @@ User=rcfgsim
 Group=rcfgsim
 
 # Defaults for every variable ExecStart uses, matching the rcfg-sim flag
-# defaults (LISTEN_IP defaults to the instance name). The env file below
-# overrides any of them, so an env file only needs the values it changes and
-# older env files without the newer variables keep working.
+# defaults except LISTEN_IP (the instance name) and HOST_KEY (the per-IP key
+# under /opt/rcfg-sim/host-keys). The env file below overrides any of them, so
+# an env file only needs the values it changes and older env files without the
+# newer variables keep working.
 Environment=LISTEN_IP=%i
 Environment=PORT_START=10000
 Environment=PORT_COUNT=2500
 Environment=MANIFEST=/opt/rcfg-sim/manifest.csv
-Environment=HOST_KEY=/etc/rcfg-sim/ssh_host_rsa_key
+Environment=HOST_KEY=/opt/rcfg-sim/host-keys/%i.key
 Environment=USERNAME=admin
 Environment=PASSWORD=admin
 Environment=ENABLE_PASSWORD=enable123
@@ -41,10 +42,12 @@ Environment=DEVICE_PROFILES=
 Environment=PROFILE_SEED=42
 Environment=LOG_LEVEL=info
 Environment=ADMIN=false
-Environment=ADMIN_TOKEN=
 
 # Per-instance config: /etc/rcfg-sim/10.50.0.1.env supplies LISTEN_IP,
 # PORT_START, etc. See /opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample.
+# systemd reads it as root before the service starts, so rcfg-sim itself needs
+# no access to /etc/rcfg-sim. ADMIN_TOKEN reaches rcfg-sim only as an
+# environment variable from this file, never on the command line (visible in ps).
 EnvironmentFile=/etc/rcfg-sim/%i.env
 
 ExecStart=/opt/rcfg-sim/bin/rcfg-sim \
@@ -70,7 +73,6 @@ ExecStart=/opt/rcfg-sim/bin/rcfg-sim \
     --device-profiles=${DEVICE_PROFILES} \
     --profile-seed=${PROFILE_SEED} \
     --admin=${ADMIN} \
-    --admin-token=${ADMIN_TOKEN} \
     --log-level=${LOG_LEVEL}
 
 # rcfg-sim binds PORT_COUNT listeners (default 2500) plus up to MAX_SESSIONS
@@ -104,11 +106,10 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-# Host keys auto-generate on first boot and must persist across restarts.
-# README's recommended location is /opt/rcfg-sim/host-keys/<IP>.key; operators
-# who prefer /etc may keep their keys there instead. Both paths are listed so
-# either convention works without editing the unit.
-ReadWritePaths=/etc/rcfg-sim /opt/rcfg-sim/host-keys
+# Host keys auto-generate on first boot and must persist across restarts, in
+# /opt/rcfg-sim/host-keys/<IP>.key. /etc/rcfg-sim is deliberately not
+# writable (nor readable: see the README) by the device processes.
+ReadWritePaths=/opt/rcfg-sim/host-keys
 
 [Install]
 WantedBy=multi-user.target

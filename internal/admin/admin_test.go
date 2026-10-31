@@ -343,17 +343,20 @@ func TestConcurrentPutsDifferentEndpoints(t *testing.T) {
 	wg.Add(4)
 	go put("/admin/v1/faults", func(i int) string { return fmt.Sprintf(`{"malformed": %g}`, float64(i)/100) })
 	go put("/admin/v1/behaviour", func(i int) string { return fmt.Sprintf(`{"max_sessions": %d}`, i) })
-	go put("/admin/v1/active", func(i int) string { return fmt.Sprintf(`{"active_devices": %d}`, i%2+2) })
+	// Starts at 2 (live is 3) and alternates, so every PUT is a change.
+	go put("/admin/v1/active", func(i int) string { return fmt.Sprintf(`{"active_devices": %d}`, (i+1)%2+2) })
 	go put("/admin/v1/profiles", func(i int) string { return `{"seed": 9, "rules": ["disconnect@50%"]}` })
 	wg.Wait()
 
 	live := f.holder.Load()
 	if live.Faults.Rate(fault.TypeMalformed) != float64(n)/100 || live.MaxSessions != n ||
-		live.ActiveDevices != n%2+2 || live.ProfileSeed != 9 || len(live.ProfileRules) != 1 {
+		live.ActiveDevices != (n+1)%2+2 || live.ProfileSeed != 9 || len(live.ProfileRules) != 1 {
 		t.Fatalf("a concurrent change was lost: %+v", live)
 	}
-	if live.Generation != 1+4*n {
-		t.Fatalf("generation: want %d, got %d", 1+4*n, live.Generation)
+	// The profiles body is the same every time, so only its first PUT changes
+	// anything; the rest leave generation alone.
+	if want := uint64(1 + 3*n + 1); live.Generation != want {
+		t.Fatalf("generation: want %d, got %d", want, live.Generation)
 	}
 }
 
@@ -467,5 +470,31 @@ func TestEventsEndOnShutdown(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("stream did not unsubscribe")
 		}
+	}
+}
+
+// TestNoOpPutKeepsGeneration: a PUT that changes nothing, including an empty
+// body, returns the state without bumping generation.
+func TestNoOpPutKeepsGeneration(t *testing.T) {
+	f := newFake(t)
+	srv := serve(t, f, "")
+	for _, c := range []struct{ path, body string }{
+		{"/admin/v1/behaviour", `{}`},
+		{"/admin/v1/behaviour", `{"max_sessions": 5000}`},
+		{"/admin/v1/faults", `{"auth_fail": 0.02}`},
+		{"/admin/v1/active", `{"active_devices": 3}`},
+		{"/admin/v1/profiles", `{"rules": []}`},
+	} {
+		code, b := do(t, srv, "PUT", c.path, c.body, "")
+		if code != 200 {
+			t.Fatalf("%s %s: %d %s", c.path, c.body, code, b)
+		}
+		if g := decodeState(t, b).Generation; g != 1 {
+			t.Errorf("%s %s: generation bumped to %d", c.path, c.body, g)
+		}
+	}
+	code, b := do(t, srv, "PUT", "/admin/v1/behaviour", `{"max_sessions": 4999}`, "")
+	if code != 200 || decodeState(t, b).Generation != 2 {
+		t.Fatalf("a real change must bump: %d %s", code, b)
 	}
 }

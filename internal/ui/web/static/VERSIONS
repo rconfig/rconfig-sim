@@ -1,0 +1,13 @@
+# Vendored front-end assets. Bump by replacing the file, its version in the
+# filename, this list, and the references in internal/ui/web/views. Licences
+# sit next to each file (vendor/*-LICENSE.txt, fonts/*-LICENSE.txt). All are
+# served from this origin; the page's Content-Security-Policy allows nothing else.
+#
+# name                     version  source                                             sha256
+htmx                       2.0.11   npm htmx.org@2.0.11 dist/htmx.min.js               d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717
+htmx-ext-sse               2.2.4    npm htmx-ext-sse@2.2.4 dist/sse.min.js             98a46496de0c3605fbffdce9167ba427bdd9553184f83f149c261891a92c0136
+uPlot (js)                 1.6.32   npm uplot@1.6.32 dist/uPlot.iife.min.js            19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f
+uPlot (css)                1.6.32   npm uplot@1.6.32 dist/uPlot.min.css                df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04
+sora (variable, wght)      5.3.0    npm @fontsource-variable/sora files/*-wght-normal   SIL OFL 1.1, see fonts/sora-LICENSE.txt
+plus-jakarta-sans (var)    5.3.0    npm @fontsource-variable/plus-jakarta-sans          SIL OFL 1.1, see fonts/plus-jakarta-sans-LICENSE.txt
+logos, favicon             -        rconfig-sim-docs src/assets, public/favicon.svg     -

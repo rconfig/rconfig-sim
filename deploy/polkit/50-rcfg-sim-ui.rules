@@ -1,0 +1,15 @@
+// Lets rcfg-sim-ui (user rcfgsim-ui) start, stop and restart simulator
+// instances, rcfg-sim@<IP>.service, and nothing else. Installed by
+// `make install-ui` to /etc/polkit-1/rules.d/.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" || subject.user !== "rcfgsim-ui") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (unit && /^rcfg-sim@[0-9A-Fa-f:.]+\.service$/.test(unit) &&
+        (verb === "start" || verb === "stop" || verb === "restart")) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

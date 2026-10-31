@@ -40,3 +40,6 @@ go.work.sum
 
 # AI Specific files
 .claude/settings.local.json
+
+# Downloaded build tools (Tailwind CLI)
+/.tools/

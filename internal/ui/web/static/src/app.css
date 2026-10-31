@@ -1,0 +1,204 @@
+/* rcfg-sim-ui stylesheet source. Build with `make ui-gen`; the output,
+   static/app.css, is committed. Tokens follow docs/UI-ARCHITECTURE.md
+   section 9 (the Sim by rConfig brand as on simdocs.rconfig.com). */
+@import "tailwindcss" source(none);
+@source "../../views";
+@source "../app.js";
+@source "../activity.js";
+
+/* Fonts are vendored (SIL OFL, licences in static/fonts). Never a CDN. */
+@font-face {
+  font-family: "Sora Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/static/fonts/sora-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Sora Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/static/fonts/sora-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url("/static/fonts/plus-jakarta-sans-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url("/static/fonts/plus-jakarta-sans-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@theme {
+  --font-sans: "Plus Jakarta Sans Variable", system-ui, sans-serif;
+  --font-heading: "Sora Variable", "Plus Jakarta Sans Variable", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Copper accent scale, Brand Guidelines 2026 (9.1). */
+  --color-accent-50: #fbf4ef;
+  --color-accent-100: #f6e5da;
+  --color-accent-200: #f2c6a2;
+  --color-accent-300: #e8a27f;
+  --color-accent-400: #d98b69;
+  --color-accent-500: #cc7a5c;
+  --color-accent-600: #a8562f;
+  --color-accent-700: #8c4220;
+  --color-accent-800: #6e3317;
+  --color-accent-900: #4f2511;
+  --color-accent-950: #2e1509;
+
+  /* Theme-aware tokens: utilities such as bg-panel or text-st-ok resolve to
+     the --ui-* variables below, which each theme sets. */
+  --color-bg: var(--ui-bg);
+  --color-panel: var(--ui-panel);
+  --color-panel-2: var(--ui-panel-2);
+  --color-line: var(--ui-line);
+  --color-fg: var(--ui-fg);
+  --color-muted: var(--ui-muted);
+  --color-link: var(--ui-link);
+  --color-link-hover: var(--ui-link-hover);
+  --color-tint: var(--ui-tint);
+  --color-st-ok: var(--ui-st-ok);
+  --color-st-active: var(--ui-st-active);
+  --color-st-auth: var(--ui-st-auth);
+  --color-st-disconnect: var(--ui-st-disconnect);
+  --color-st-error: var(--ui-st-error);
+  --color-st-hang: var(--ui-st-hang);
+  --color-st-inactive: var(--ui-st-inactive);
+  --color-st-never: var(--ui-st-never);
+
+  --radius-card: 8px;
+}
+
+/* Dark is the default (9.3). */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-bg: var(--color-zinc-950);
+  --ui-panel: var(--color-zinc-900);
+  --ui-panel-2: color-mix(in oklab, var(--color-zinc-900) 70%, var(--color-zinc-800));
+  --ui-line: var(--color-zinc-800);
+  --ui-fg: var(--color-zinc-100);
+  --ui-muted: var(--color-zinc-400);
+  --ui-link: var(--color-accent-200);
+  --ui-link-hover: var(--color-accent-300);
+  --ui-tint: var(--color-accent-900);
+  --ui-st-ok: var(--color-emerald-400);
+  --ui-st-active: var(--color-sky-400);
+  --ui-st-auth: var(--color-amber-400);
+  --ui-st-disconnect: var(--color-orange-400);
+  --ui-st-error: var(--color-rose-500);
+  --ui-st-hang: var(--color-violet-400);
+  --ui-st-inactive: var(--color-zinc-700);
+  --ui-st-never: var(--color-zinc-800);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ui-bg: #ffffff;
+  --ui-panel: var(--color-zinc-50);
+  --ui-panel-2: var(--color-zinc-100);
+  --ui-line: var(--color-zinc-200);
+  --ui-fg: var(--color-zinc-900);
+  --ui-muted: var(--color-zinc-600);
+  --ui-link: var(--color-accent-700);
+  --ui-link-hover: var(--color-accent-800);
+  --ui-tint: var(--color-accent-50);
+  --ui-st-ok: var(--color-emerald-600);
+  --ui-st-active: var(--color-sky-600);
+  --ui-st-auth: var(--color-amber-600);
+  --ui-st-disconnect: var(--color-orange-600);
+  --ui-st-error: var(--color-rose-600);
+  --ui-st-hang: var(--color-violet-600);
+  --ui-st-inactive: var(--color-zinc-300);
+  --ui-st-never: var(--color-zinc-200);
+}
+
+/* Auto follows the OS. */
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    color-scheme: light;
+    --ui-bg: #ffffff;
+    --ui-panel: var(--color-zinc-50);
+    --ui-panel-2: var(--color-zinc-100);
+    --ui-line: var(--color-zinc-200);
+    --ui-fg: var(--color-zinc-900);
+    --ui-muted: var(--color-zinc-600);
+    --ui-link: var(--color-accent-700);
+    --ui-link-hover: var(--color-accent-800);
+    --ui-tint: var(--color-accent-50);
+    --ui-st-ok: var(--color-emerald-600);
+    --ui-st-active: var(--color-sky-600);
+    --ui-st-auth: var(--color-amber-600);
+    --ui-st-disconnect: var(--color-orange-600);
+    --ui-st-error: var(--color-rose-600);
+    --ui-st-hang: var(--color-violet-600);
+    --ui-st-inactive: var(--color-zinc-300);
+    --ui-st-never: var(--color-zinc-200);
+  }
+}
+
+@layer base {
+  body {
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+    font-family: var(--font-sans);
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+  a { color: var(--ui-link); }
+  a:hover { color: var(--ui-link-hover); }
+  :focus-visible {
+    outline: 2px solid var(--color-accent-500);
+    outline-offset: 2px;
+  }
+  ::selection { background: color-mix(in srgb, var(--color-accent-500) 35%, transparent); }
+  input[type="range"] { accent-color: var(--color-accent-500); }
+  input[type="checkbox"] { accent-color: var(--color-accent-600); }
+}
+
+@layer components {
+  /* The brand gradient, used in exactly two places (9.1). */
+  .brand-hairline {
+    border-top: 3px solid transparent;
+    border-image: linear-gradient(90deg, #8c4220, #cc7a5c, #f2c6a2) 1;
+  }
+  .brand-fill { background: linear-gradient(90deg, #8c4220, #cc7a5c, #f2c6a2); color: #1b0d06; }
+
+  .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  /* The logo that suits the theme (9.4). */
+  .logo-light { display: none; }
+  :root[data-theme="light"] .logo-dark { display: none; }
+  :root[data-theme="light"] .logo-light { display: inline; }
+  @media (prefers-color-scheme: light) {
+    :root[data-theme="auto"] .logo-dark { display: none; }
+    :root[data-theme="auto"] .logo-light { display: inline; }
+  }
+
+  .htmx-indicator { opacity: 0; transition: opacity 150ms; }
+  .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

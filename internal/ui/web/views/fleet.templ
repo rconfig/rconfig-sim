@@ -1,0 +1,224 @@
+package views
+
+import "github.com/rcfg-sim/rcfg-sim/internal/ui/fleet"
+
+// FleetPage is the Fleet (service control) screen (10.1).
+templ FleetPage(p Page, m FleetModel) {
+	@Layout(p) {
+		<div class="flex items-baseline justify-between gap-4">
+			<h1 class="text-2xl">Fleet</h1>
+			<p class="text-muted">Changes apply to new sessions and are saved to each instance's env file.</p>
+		</div>
+		@FleetCards(m, false)
+		<div class="mt-8 grid gap-6 xl:grid-cols-2">
+			@activeForm(m)
+			@delayForm(m)
+			@capsForm(m)
+			@fleetActions()
+		</div>
+	}
+}
+
+// FleetCards is the instance grid. It polls itself, and refreshes at once
+// after any change (the fleet-changed event).
+templ FleetCards(m FleetModel, oob bool) {
+	<section
+		id="fleet-cards"
+		hx-get="/fleet/cards"
+		hx-trigger={ "every " + m.Poll + ", fleet-changed from:body" }
+		hx-swap="outerHTML"
+		class="mt-6"
+		aria-label="Instances"
+	>
+		if oob {
+			@HealthPill(countUp(m.Views), len(m.Views), true)
+		}
+		@rollingStatus(m.Rolling)
+		if len(m.Views) == 0 {
+			<p class="rounded-card border border-line bg-panel p-6 text-muted">No instances found. Each <code class="num">*.env</code> file in the env directory is one instance.</p>
+		}
+		<div class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(18rem,1fr))]">
+			for _, v := range m.Views {
+				@card(v)
+			}
+		</div>
+	</section>
+}
+
+func countUp(vs []fleet.View) int { return len(upViews(vs)) }
+
+templ card(v fleet.View) {
+	<article class="flex flex-col gap-3 rounded-card border border-line bg-panel p-4" data-instance={ v.Name }>
+		<div class="flex items-start justify-between gap-2">
+			<div>
+				<h2 class="num text-base">{ v.ListenIP }</h2>
+				<p class="num text-xs text-muted">ports { portRange(v) } · metrics { v.MetricsAddr }</p>
+			</div>
+			<span class={ "shrink-0 rounded-full border px-2 py-0.5 text-xs", statusClass(v.Status) }>{ statusLabel(v.Status) }</span>
+		</div>
+		if v.Status == fleet.StatusUp && v.State != nil {
+			<div>
+				<div class="flex justify-between text-xs">
+					<span class="text-muted">Sessions</span>
+					<span class="num">{ i64(v.State.ActiveSessions) } / { i64(v.State.MaxSessions) }</span>
+				</div>
+				<svg class="mt-1 h-1.5 w-full" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
+					<rect width="100" height="4" class="fill-panel-2"></rect>
+					<rect width={ sessionPct(v.State) } height="4" class="fill-st-active"></rect>
+				</svg>
+			</div>
+			<div class="flex items-center justify-between gap-3 text-xs">
+				<span class="text-muted">Active devices <span class="num text-fg">{ itoa(v.State.ActiveDevices) } / { itoa(v.State.Devices) }</span></span>
+				<span class="text-muted">Generation <span class="num text-fg">{ i64(int64(v.State.Generation)) }</span></span>
+			</div>
+			if len(v.Drift) > 0 {
+				<div class="flex items-center justify-between gap-2 rounded-md border border-st-auth px-2 py-1.5 text-xs">
+					<span><span class="font-semibold text-st-auth">Drift</span> env file differs: { joinComma(v.Drift) }</span>
+					<button type="button" hx-post={ "/fleet/instances/" + v.Name + "/reapply" } hx-target="#flash" hx-confirm={ "Apply " + v.EnvPath + " to " + v.Name + "?" } class="rounded-md border border-line px-2 py-0.5 hover:bg-tint">Re-apply</button>
+				</div>
+			}
+		} else {
+			<p class="text-xs text-muted">{ v.Detail }</p>
+			if v.Unit != "" {
+				<p class="text-xs">Unit <span class="num">rcfg-sim@{ v.Name }</span>: <span class="num font-semibold">{ v.Unit }</span></p>
+			}
+		}
+		<div class="flex items-end justify-between gap-3">
+			<div class="min-w-0">
+				<p class="text-xs text-muted">Sent</p>
+				<p class="num">{ lastRate(v.BytesPS) }</p>
+			</div>
+			<svg class="h-7 w-32" viewBox="0 0 120 28" aria-label={ "bytes per second, last " + itoa(len(v.BytesPS)) + " polls" } role="img">
+				<polyline points={ sparkPoints(v.BytesPS) } fill="none" class="stroke-accent-500" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>
+			</svg>
+		</div>
+		<div class="flex gap-2 border-t border-line pt-3">
+			@unitButton(v.Name, "start", "Start", "")
+			@unitButton(v.Name, "restart", "Restart", "Restart "+v.Name+"? Its sessions end.")
+			@unitButton(v.Name, "stop", "Stop", "Stop "+v.Name+"? Its devices go offline.")
+		</div>
+	</article>
+}
+
+templ unitButton(name, verb, label, confirm string) {
+	<button
+		type="button"
+		hx-post={ "/fleet/instances/" + name + "/" + verb }
+		hx-target="#flash"
+		if confirm != "" {
+			hx-confirm={ confirm }
+		}
+		class="rounded-md border border-line px-2.5 py-1 text-xs hover:bg-tint"
+	>{ label }</button>
+}
+
+templ rollingStatus(r RollingView) {
+	if r.Running || r.Done {
+		<div class={ "mb-4 rounded-card border bg-panel px-4 py-3", templ.KV("border-line", r.Err == ""), templ.KV("border-st-error", r.Err != "") }>
+			<p class="font-medium">
+				if r.Running {
+					Rolling restart in progress
+				} else if r.Err != "" {
+					Rolling restart stopped
+				} else {
+					Rolling restart finished
+				}
+			</p>
+			<ol class="num mt-1 text-xs text-muted">
+				for _, s := range r.Steps {
+					<li>{ s }</li>
+				}
+			</ol>
+			if r.Err != "" {
+				<p class="mt-1 text-xs text-st-error">{ r.Err }</p>
+			}
+		</div>
+	}
+}
+
+templ panel(title, help string) {
+	<section class="rounded-card border border-line bg-panel p-5">
+		<h2 class="text-lg">{ title }</h2>
+		if help != "" {
+			<p class="mt-1 text-muted">{ help }</p>
+		}
+		<div class="mt-4">
+			{ children... }
+		</div>
+	</section>
+}
+
+// pendingWatch posts its form to url whenever an input changes, so the
+// pending bar shows what Apply would do.
+templ pendingWatch(url, form string) {
+	<div hidden hx-post={ url } hx-trigger={ "input changed delay:250ms from:#" + form } hx-include={ "#" + form } hx-target="#pending" hx-swap="innerHTML"></div>
+}
+
+templ activeForm(m FleetModel) {
+	@panel("Active devices", "Devices past the count drop connections, like the refuse profile. The fleet total is split across instances in proportion to their device counts.") {
+		<form id="form-active" hx-post="/fleet/active" hx-target="#flash" class="flex flex-col gap-3">
+			@pendingWatch("/pending/active", "form-active")
+			<div class="flex items-center gap-3">
+				<input type="range" min="0" max={ itoa(m.Devices) } step="1" value={ itoa(m.Active) } data-sync="active-total" class="flex-1" aria-label="Active devices"/>
+				<input id="active-total" name="active" type="number" min="0" max={ itoa(m.Devices) } step="1" value={ itoa(m.Active) } class="num w-28 rounded-md border border-line bg-bg px-2 py-1"/>
+				<span class="num text-muted">/ { itoa(m.Devices) }</span>
+			</div>
+			<div><button type="submit" class="rounded-md bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700">Apply</button></div>
+		</form>
+	}
+}
+
+templ delayForm(m FleetModel) {
+	@panel("Response delay", "Uniform per-command delay window, in milliseconds. A latency profile replaces it on its devices.") {
+		<form id="form-delay" hx-post="/fleet/delay" hx-target="#flash" class="flex flex-col gap-3">
+			@pendingWatch("/pending/delay", "form-delay")
+			if m.Ref != nil {
+				@delayRow("Min", "delay-min", "delay_min", m.Ref.DelayMS.Min)
+				@delayRow("Max", "delay-max", "delay_max", m.Ref.DelayMS.Max)
+				<div><button type="submit" class="rounded-md bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700">Apply</button></div>
+			} else {
+				<p class="text-muted">No instance is up.</p>
+			}
+		</form>
+	}
+}
+
+templ delayRow(label, id, name string, v int64) {
+	<div class="flex items-center gap-3">
+		<label for={ id } class="w-10 text-muted">{ label }</label>
+		<input type="range" min="0" max="5000" step="10" value={ i64(v) } data-sync={ id } class="flex-1" aria-label={ label + " delay" }/>
+		<input id={ id } name={ name } type="number" min="0" max="3600000" step="1" value={ i64(v) } class="num w-28 rounded-md border border-line bg-bg px-2 py-1"/>
+		<span class="text-muted">ms</span>
+	</div>
+}
+
+templ capsForm(m FleetModel) {
+	@panel("Session cap", "Concurrent sessions each instance admits. Lowering it ends no session; new ones are refused until the count drops.") {
+		<form id="form-caps" hx-post="/fleet/caps" hx-target="#flash" class="flex flex-col gap-2">
+			@pendingWatch("/pending/caps", "form-caps")
+			for _, v := range upViews(m.Views) {
+				<div class="flex items-center gap-3">
+					<label for={ "cap-" + v.Name } class="num w-36">{ v.Name }</label>
+					<input id={ "cap-" + v.Name } name={ "cap_" + v.Name } type="number" min="1" step="1" value={ i64(v.State.MaxSessions) } class="num w-32 rounded-md border border-line bg-bg px-2 py-1"/>
+				</div>
+			}
+			<p class="text-muted">Fleet total <span class="num text-fg">{ i64(m.CapTotal) }</span></p>
+			<div><button type="submit" class="rounded-md bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700">Apply</button></div>
+		</form>
+	}
+}
+
+templ fleetActions() {
+	@panel("Fleet actions", "Start, stop or restart every instance. A rolling restart does one at a time and waits for each to answer /healthz before the next.") {
+		<form id="form-rolling" class="flex flex-wrap items-center gap-2">
+			<button type="button" hx-post="/fleet/all/start" hx-target="#flash" class="rounded-md border border-line px-3 py-1.5 hover:bg-tint">Start all</button>
+			<button type="button" hx-post="/fleet/all/restart" hx-target="#flash" hx-confirm="Restart every instance at once? All sessions end." class="rounded-md border border-line px-3 py-1.5 hover:bg-tint">Restart all</button>
+			<button type="button" hx-post="/fleet/all/stop" hx-target="#flash" hx-confirm="Stop every instance? The whole fleet goes offline." class="rounded-md border border-st-error px-3 py-1.5 text-st-error hover:bg-tint">Stop all</button>
+			<span class="mx-2 h-6 border-l border-line"></span>
+			<label for="rolling-pause" class="text-muted">Pause</label>
+			<input id="rolling-pause" name="pause" type="number" min="0" max="600" value="5" class="num w-20 rounded-md border border-line bg-bg px-2 py-1"/>
+			<span class="text-muted">s</span>
+			<button type="button" hx-post="/fleet/rolling-restart" hx-include="#form-rolling" hx-target="#flash" hx-confirm="Restart the instances one at a time?" class="rounded-md bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700">Rolling restart</button>
+		</form>
+	}
+}
