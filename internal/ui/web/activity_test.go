@@ -54,7 +54,7 @@ func recv(t *testing.T, sub *activity.Subscriber) activity.Event {
 // TestHubIdleHoldsNothing: with no browser connected, no upstream event
 // connection and no poller.
 func TestHubIdleHoldsNothing(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	e.fleet.Poll(context.Background())
 	time.Sleep(300 * time.Millisecond)
 	if e.srv.Hub().UpstreamConns() != 0 || instancesConnected(e.insts) != 0 || e.srv.Hub().Frame() != nil {
@@ -66,7 +66,7 @@ func TestHubIdleHoldsNothing(t *testing.T) {
 // browsers; every browser gets every event; the last leave closes every
 // upstream connection.
 func TestHubFanOutAndTeardown(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	hub := e.srv.Hub()
 
 	sub1, leave1 := hub.Join()
@@ -116,7 +116,7 @@ func TestHubFanOutAndTeardown(t *testing.T) {
 // TestHubFollowsInstanceChanges: an instance that goes down loses its
 // upstream; one that comes back gets a new one.
 func TestHubFollowsInstanceChanges(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	hub := e.srv.Hub()
 	_, leave := hub.Join()
 	defer leave()
@@ -207,7 +207,7 @@ func TestAssembleFrameFleetScale(t *testing.T) {
 }
 
 func TestHubFrameFromInstances(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	e.insts[0].Table.Start(2)                                   // device 2 active
 	e.insts[1].Table.End(0, activity.StateAuthFail, time.Now()) // device 0 auth_fail
 	_, leave := e.srv.Hub().Join()
@@ -274,13 +274,13 @@ func waitFor(t *testing.T, ch <-chan sseEvent, name string) sseEvent {
 // TestActivityStream: the browser stream carries history, frames, the
 // summary HTML, events and rates; closing it tears the hub down.
 func TestActivityStream(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	e.insts[0].Sessions.Store(10)
 	e.fleet.Poll(context.Background()) // a chart point exists before connecting
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, "GET", e.http.URL+"/activity/stream", nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,8 +325,8 @@ func TestActivityStream(t *testing.T) {
 }
 
 func TestActivityStreamEndsOnServerClose(t *testing.T) {
-	e := newEnv(t, 1, "")
-	resp, err := http.Get(e.http.URL + "/activity/stream")
+	e := newEnv(t, 1)
+	resp, err := e.client().Get(e.http.URL + "/activity/stream")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,9 +350,10 @@ func TestActivityStreamEndsOnServerClose(t *testing.T) {
 }
 
 func TestActivityHostsAndDevice(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	req, _ := http.NewRequest("GET", e.http.URL+"/activity/hosts", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: e.session})
 	resp, err := (&http.Transport{DisableCompression: true}).RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
@@ -389,7 +390,7 @@ func TestActivityHostsAndDevice(t *testing.T) {
 }
 
 func TestActivityPageRender(t *testing.T) {
-	e := newEnv(t, 1, "")
+	e := newEnv(t, 1)
 	body := e.get("/activity")
 	for _, want := range []string{
 		`hx-ext="sse"`, `sse-connect="/activity/stream"`, `sse-swap="summary"`,

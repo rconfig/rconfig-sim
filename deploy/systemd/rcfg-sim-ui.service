@@ -21,8 +21,9 @@ Environment=POLL=2s
 Environment=SYSTEMCTL=systemctl
 Environment=LOG_LEVEL=info
 
-# UI_TOKEN and ADMIN_TOKEN reach rcfg-sim-ui only as environment variables
-# from this file, never on the command line (visible in ps). Optional ("-").
+# UI_USERNAME and UI_PASSWORD_HASH (the login) reach rcfg-sim-ui only as
+# environment variables from this file, never on the command line (visible
+# in ps). rcfg-sim-ui refuses to start without them.
 EnvironmentFile=-/etc/rcfg-sim-ui/rcfg-sim-ui.env
 
 ExecStart=/opt/rcfg-sim/bin/rcfg-sim-ui \
@@ -47,14 +48,17 @@ StateDirectoryMode=0750
 # New env files and temp files stay group-writable for rcfgsim-ui only.
 UMask=0007
 
-# Sandboxing. Writes only its state directory and /etc/rcfg-sim. Unit control
+# Sandboxing. Writes only its state directory, /etc/rcfg-sim and the build
+# data directory (/opt/rcfg-sim/data, absent until `make adopt-data`, hence
+# the "-"). Never the rest of /opt/rcfg-sim, so it cannot replace the
+# simulator binaries. Unit control
 # goes to systemd over D-Bus and is authorised by the polkit rule, so no
 # privilege escalation is needed. Hosts using the sudoers alternative must
 # set NoNewPrivileges=false in a drop-in (see the README).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/etc/rcfg-sim
+ReadWritePaths=/etc/rcfg-sim -/opt/rcfg-sim/data
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

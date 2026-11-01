@@ -47,7 +47,7 @@ IP_COUNT      ?= 20
 
 .PHONY: all build test vet fmt install uninstall clean \
         generate-configs deploy-aliases remove-aliases integration bench \
-        ui-gen ui-check install-ui uninstall-ui etc-perms
+        ui-gen ui-check install-ui uninstall-ui etc-perms adopt-data
 
 all: build
 
@@ -93,6 +93,9 @@ install: build
 	fi
 	@if [ "$$(realpath -m deploy/ip-aliases.sh)" != "$$(realpath -m $(PREFIX)/deploy/ip-aliases.sh)" ]; then \
 		install -m 0755 deploy/ip-aliases.sh $(PREFIX)/deploy/ip-aliases.sh; \
+	fi
+	@if [ "$$(realpath -m deploy/adopt-data.sh)" != "$$(realpath -m $(PREFIX)/deploy/adopt-data.sh)" ]; then \
+		install -m 0755 deploy/adopt-data.sh $(PREFIX)/deploy/adopt-data.sh; \
 	fi
 	install -m 0644 deploy/systemd/rcfg-sim@.service $(SYSTEMD_DIR)/rcfg-sim@.service
 	install -m 0644 deploy/sysctl-rcfg-sim.conf      $(SYSCTL_DIR)/99-rcfg-sim.conf
@@ -163,10 +166,17 @@ install-ui: build
 	systemctl daemon-reload
 	@echo
 	@echo "install-ui complete. Next:"
-	@echo "  1. Set ADMIN=true (and ADMIN_TOKEN, if used) in each $(ETC_DIR)/<IP>.env, then restart those instances"
-	@echo "  2. Edit $(UI_ETC_DIR)/rcfg-sim-ui.env (UI_TOKEN, ADMIN_TOKEN, UI_ADDR)"
+	@echo "  1. Set ADMIN=true and METRICS_ADDR=127.0.0.1:<port> in each $(ETC_DIR)/<IP>.env, then restart those instances"
+	@echo "  2. $(PREFIX)/bin/rcfg-sim-ui hash-password, then put UI_USERNAME and UI_PASSWORD_HASH in $(UI_ETC_DIR)/rcfg-sim-ui.env"
 	@echo "  3. sudo systemctl enable --now rcfg-sim-ui"
 	@echo "  4. ssh -L 8080:127.0.0.1:8080 <this host>, then open http://127.0.0.1:8080/"
+
+# adopt-data moves a pre-UI install to the data/ build layout the UI's
+# Build screen needs (docs/UI-ARCHITECTURE.md 7.5). One-off; refuses if
+# already adopted. Restart the instances afterwards.
+adopt-data:
+	@[ "$$(id -u)" -eq 0 ] || { echo "adopt-data requires root (try: sudo make adopt-data)"; exit 1; }
+	bash deploy/adopt-data.sh --data-dir $(PREFIX)/data --manifest $(MANIFEST) --configs-dir $(OUTPUT_DIR) --env-dir $(ETC_DIR) --group $(UI_GROUP)
 
 uninstall-ui:
 	@[ "$$(id -u)" -eq 0 ] || { echo "uninstall-ui requires root"; exit 1; }

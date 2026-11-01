@@ -20,6 +20,7 @@ type Page struct {
 	Nav   string // "fleet" or "failures"
 	Up    int    // instances up
 	Total int    // instances discovered
+	User  string // the logged-in user, for the header
 	// Scripts and Styles are extra same-origin assets for this page, loaded
 	// after the shared ones (Styles before app.css, so app.css wins).
 	Scripts []string
@@ -211,8 +212,6 @@ func statusLabel(s fleet.Status) string {
 		return "Down"
 	case fleet.StatusAdminOff:
 		return "Admin API off"
-	case fleet.StatusAuth:
-		return "Token rejected"
 	case fleet.StatusPortClash:
 		return "Port clash"
 	case fleet.StatusBadEnv:
@@ -228,7 +227,7 @@ func statusClass(s fleet.Status) string {
 	switch s {
 	case fleet.StatusUp:
 		return "text-st-ok border-st-ok"
-	case fleet.StatusAdminOff, fleet.StatusAuth:
+	case fleet.StatusAdminOff:
 		return "text-st-auth border-st-auth"
 	default:
 		return "text-st-error border-st-error"
@@ -316,4 +315,77 @@ func StateClass(name string) string {
 	default:
 		return "bg-panel-2"
 	}
+}
+
+// BuildModel is the Build screen (10.4).
+type BuildModel struct {
+	NotAdopted string // why the install is not on the data/ layout; "" if it is
+	Err        string // a layout problem that blocks builds
+	Live       *BuildInfo
+	Previous   *BuildInfo // what rollback would restore; nil if none
+	Instances  int
+	PerIP      int
+	MinCount   int
+	MaxCount   int
+	Count      int
+	Seed       int64
+	Weights    []WeightRow
+	Unknowns   bool // the live build's seed or distribution is unknown (adopted)
+	Job        *JobModel
+	DataDir    string
+}
+
+// BuildInfo describes one build.
+type BuildInfo struct {
+	Name, Created, Distribution, Seed string
+	Count                             int
+	Adopted                           bool
+}
+
+// WeightRow is one model in the distribution editor.
+type WeightRow struct {
+	Model string
+	Pct   int
+}
+
+// EstimateModel is the Build screen's estimate panel.
+type EstimateModel struct {
+	Err      string
+	Steps    []string // manual steps for a count that needs more IPs
+	Total    int      // distribution weights
+	Bars     []Bar
+	Disk     string
+	RAM      string
+	Free     string
+	Generate string
+	Restart  string
+	Fits     bool
+	Ready    bool // nothing blocks Run
+	Unknowns bool
+}
+
+// Bar is one model's segment of the stacked distribution bar.
+type Bar struct {
+	Model string
+	X, W  string // percent of the bar
+	Class string
+	Pct   int
+}
+
+// JobModel is a running or finished build or rollback.
+type JobModel struct {
+	ID            string
+	Kind          string
+	Lines         []string
+	Finished      bool
+	Err           string
+	OfferRollback bool
+}
+
+// ModelFills colours the stacked distribution bar, by model order. Listed
+// in full so Tailwind generates each class.
+var ModelFills = []string{
+	"fill-accent-200", "fill-accent-300", "fill-accent-400", "fill-accent-500", "fill-accent-600",
+	"fill-accent-700", "fill-accent-800", "fill-accent-900", "fill-accent-950",
+	"fill-st-active", "fill-st-ok", "fill-st-hang", "fill-st-auth",
 }

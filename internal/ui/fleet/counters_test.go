@@ -124,7 +124,7 @@ func TestRecordRatesAndReset(t *testing.T) {
 func TestPollFeedsSeries(t *testing.T) {
 	dir := t.TempDir()
 	in := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	in.Sessions.Store(20)
 	in.Bytes.Store(5000)
 	in.Active.Store(3)
@@ -140,7 +140,7 @@ func TestDeviceAndHostnames(t *testing.T) {
 	dir := t.TempDir()
 	a := uitest.Start(t, dir, "127.0.0.1", uitest.Options{Devices: 50})
 	uitest.WriteManifest(t, dir, map[string]string{"rtr-127.0.0.1-3": "hang:60s"}, a)
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 
 	hosts := f.Hostnames()["127.0.0.1"]
 	if len(hosts) != 50 || hosts[7] != "rtr-127.0.0.1-7" {

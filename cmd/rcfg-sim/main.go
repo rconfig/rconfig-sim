@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -31,8 +32,7 @@ func main() {
 		faultTypes   = flag.String("fault-types", "", "comma-separated fault types: auth_fail,disconnect_mid,slow_response,malformed")
 		faultRate    = flag.Float64("fault-rate", 0.0, "probability [0,1] that an enabled fault fires per event")
 		faultRates   = flag.String("fault-rates", "", "per-type fault probabilities [0,1]: type=rate,... e.g. auth_fail=0.02,disconnect_mid=0.005 (replaces --fault-rate/--fault-types; setting both is an error)")
-		adminOn      = flag.Bool("admin", false, "serve the admin API (/admin/v1/*) on --metrics-addr")
-		adminToken   = flag.String("admin-token", "", "if set, admin API requests must send Authorization: Bearer <token>; unset falls back to the ADMIN_TOKEN environment variable (preferred: a command line is visible in ps)")
+		adminOn      = flag.Bool("admin", false, "serve the admin API (/admin/v1/*) on --metrics-addr; it has no authentication, so keep --metrics-addr on loopback")
 		activeDevs   = flag.String("active-devices", "all", "how many devices, in port order from --port-start, accept sessions: all, or 0..port-count; the rest drop connections like the refuse profile")
 		devProfiles  = flag.String("device-profiles", "", "per-device behaviour for a share of the fleet: profile@percent,... e.g. hang:3600s@3%,latency:200-800ms@10% (profiles: hang:<duration>, latency:<min>-<max>, refuse, disconnect)")
 	)
@@ -52,10 +52,11 @@ func main() {
 	flag.IntVar(&cfg.MaxConcurrentSessions, "max-concurrent-sessions", 5000, "cap on concurrent sessions")
 	flag.DurationVar(&cfg.MaxSessionDuration, "max-session", 5*time.Minute, "longest a session may last before the simulator closes it; a hang profile adds its hang")
 
-	flag.Parse()
-	if *adminToken == "" {
-		*adminToken = os.Getenv("ADMIN_TOKEN")
+	if err := checkRemovedFlags(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "rcfg-sim: %v\n", err)
+		os.Exit(2)
 	}
+	flag.Parse()
 
 	cfg.ManifestPath = *manifestPath
 	cfg.Logger = makeLogger(*logLevel)
@@ -103,15 +104,12 @@ func main() {
 			PortStart: cfg.PortStart,
 			PortCount: cfg.PortCount,
 			Devices:   server.DeviceCount(),
-			Token:     *adminToken,
 			Logger:    cfg.Logger,
 		}))
-		if *adminToken == "" && !loopback(cfg.MetricsAddr) {
-			cfg.Logger.Warn("admin API is on a non-loopback address with no admin token; anyone who can reach it can change faults and capacity", "metrics_addr", cfg.MetricsAddr)
+		if !loopback(cfg.MetricsAddr) {
+			cfg.Logger.Warn("admin API has no authentication and is on a non-loopback address; anyone who can reach it can change faults and capacity. Bind --metrics-addr to 127.0.0.1", "metrics_addr", cfg.MetricsAddr)
 		}
-		cfg.Logger.Info("admin API enabled", "addr", cfg.MetricsAddr, "prefix", admin.Prefix, "token", *adminToken != "")
-	} else if *adminToken != "" {
-		cfg.Logger.Warn("an admin token is set but --admin is not; the admin API is off")
+		cfg.Logger.Info("admin API enabled", "addr", cfg.MetricsAddr, "prefix", admin.Prefix)
 	}
 
 	if err := server.Start(); err != nil {
@@ -124,6 +122,28 @@ func main() {
 	<-sig
 	cfg.Logger.Info("shutdown requested")
 	server.Shutdown(30 * time.Second)
+}
+
+// removedFlags are flags taken out of rcfg-sim, with what to do instead.
+var removedFlags = map[string]string{
+	"admin-token": "--admin-token was removed: the admin API has no authentication. Keep --metrics-addr on 127.0.0.1 (make setup does) and drop ADMIN_TOKEN from the env file",
+}
+
+// checkRemovedFlags turns a removed flag into a clear error instead of
+// the flag package's "flag provided but not defined".
+func checkRemovedFlags(args []string) error {
+	for _, a := range args {
+		if a == "--" {
+			return nil
+		}
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if strings.HasPrefix(a, "-") {
+			if msg, ok := removedFlags[name]; ok {
+				return errors.New(msg)
+			}
+		}
+	}
+	return nil
 }
 
 // profileItems splits a --device-profiles spec into its items, as given,

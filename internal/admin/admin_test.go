@@ -64,26 +64,23 @@ func (f *fakeInstance) Bus() *activity.Bus                 { return f.bus }
 func (f *fakeInstance) StartedAt() time.Time               { return f.started }
 func (f *fakeInstance) Done() <-chan struct{}              { return f.done }
 
-func serve(t *testing.T, f *fakeInstance, token string) *httptest.Server {
+func serve(t *testing.T, f *fakeInstance) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.Handle(Prefix, Handler(f, Options{
 		Version: "0.0.6", ListenIP: "10.50.0.1", PortStart: 10000, PortCount: 3, Devices: 3,
-		Token: token, DroppedEvery: 20 * time.Millisecond,
+		DroppedEvery: 20 * time.Millisecond,
 	}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-func do(t *testing.T, srv *httptest.Server, method, path, body, token string) (int, []byte) {
+func do(t *testing.T, srv *httptest.Server, method, path, body string) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -121,8 +118,8 @@ func wantError(t *testing.T, code int, b []byte, wantCode int) {
 }
 
 func TestGetState(t *testing.T) {
-	srv := serve(t, newFake(t), "")
-	code, b := do(t, srv, "GET", "/admin/v1/state", "", "")
+	srv := serve(t, newFake(t))
+	code, b := do(t, srv, "GET", "/admin/v1/state", "")
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
@@ -157,9 +154,9 @@ func TestGetState(t *testing.T) {
 
 func TestPutFaults(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 
-	code, b := do(t, srv, "PUT", "/admin/v1/faults", `{"disconnect_mid": 0.005, "slow_response": 1}`, "")
+	code, b := do(t, srv, "PUT", "/admin/v1/faults", `{"disconnect_mid": 0.005, "slow_response": 1}`)
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
@@ -172,7 +169,7 @@ func TestPutFaults(t *testing.T) {
 	}
 
 	for _, body := range []string{`{"auth_fail": 1.5}`, `{"auth_fail": -0.1}`, `{"bogus": 0.1}`, `{"auth_fail": "x"}`, `[1]`, `{`, `{} {}`} {
-		code, b := do(t, srv, "PUT", "/admin/v1/faults", body, "")
+		code, b := do(t, srv, "PUT", "/admin/v1/faults", body)
 		wantError(t, code, b, 400)
 	}
 	if g := f.holder.Load().Generation; g != 2 {
@@ -182,9 +179,9 @@ func TestPutFaults(t *testing.T) {
 
 func TestPutProfiles(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 
-	code, b := do(t, srv, "PUT", "/admin/v1/profiles", `{"seed": 7, "rules": ["refuse@100%"]}`, "")
+	code, b := do(t, srv, "PUT", "/admin/v1/profiles", `{"seed": 7, "rules": ["refuse@100%"]}`)
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
@@ -198,7 +195,7 @@ func TestPutProfiles(t *testing.T) {
 	}
 
 	// Seed omitted keeps the current seed; [] clears.
-	code, b = do(t, srv, "PUT", "/admin/v1/profiles", `{"rules": []}`, "")
+	code, b = do(t, srv, "PUT", "/admin/v1/profiles", `{"rules": []}`)
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
@@ -214,23 +211,23 @@ func TestPutProfiles(t *testing.T) {
 		`{"rules": ["bogus@1%"]}`,
 		`{"rules": [""]}`,
 	} {
-		code, b := do(t, srv, "PUT", "/admin/v1/profiles", body, "")
+		code, b := do(t, srv, "PUT", "/admin/v1/profiles", body)
 		wantError(t, code, b, 400)
 	}
 }
 
 func TestPutBehaviour(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 
-	code, b := do(t, srv, "PUT", "/admin/v1/behaviour", `{"delay_ms": {"min": 0, "max": 10}}`, "")
+	code, b := do(t, srv, "PUT", "/admin/v1/behaviour", `{"delay_ms": {"min": 0, "max": 10}}`)
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
 	if st := decodeState(t, b); st.DelayMS != (DelayMS{0, 10}) || st.MaxSessions != 5000 {
 		t.Fatalf("delay only: %+v", st)
 	}
-	code, b = do(t, srv, "PUT", "/admin/v1/behaviour", `{"max_sessions": 12}`, "")
+	code, b = do(t, srv, "PUT", "/admin/v1/behaviour", `{"max_sessions": 12}`)
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
@@ -249,22 +246,22 @@ func TestPutBehaviour(t *testing.T) {
 		`{"max_sessions": 0}`,
 		`{"max_sessions": 5, "extra": 1}`,
 	} {
-		code, b := do(t, srv, "PUT", "/admin/v1/behaviour", body, "")
+		code, b := do(t, srv, "PUT", "/admin/v1/behaviour", body)
 		wantError(t, code, b, 400)
 	}
 }
 
 func TestPutActive(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 	for _, n := range []int{0, 2, 3} {
-		code, b := do(t, srv, "PUT", "/admin/v1/active", fmt.Sprintf(`{"active_devices": %d}`, n), "")
+		code, b := do(t, srv, "PUT", "/admin/v1/active", fmt.Sprintf(`{"active_devices": %d}`, n))
 		if code != 200 || decodeState(t, b).ActiveDevices != n || f.holder.Load().ActiveDevices != n {
 			t.Fatalf("active %d: status %d %s", n, code, b)
 		}
 	}
 	for _, body := range []string{`{"active_devices": -1}`, `{"active_devices": 4}`, `{}`} {
-		code, b := do(t, srv, "PUT", "/admin/v1/active", body, "")
+		code, b := do(t, srv, "PUT", "/admin/v1/active", body)
 		wantError(t, code, b, 400)
 	}
 }
@@ -275,9 +272,9 @@ func TestGetDevices(t *testing.T) {
 	f.table.End(0, activity.StateOK, now)
 	f.table.Start(1)
 	_, _ = f.holder.Update(func(l *runtime.Live) error { l.ActiveDevices = 2; return nil })
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 
-	code, b := do(t, srv, "GET", "/admin/v1/devices", "", "")
+	code, b := do(t, srv, "GET", "/admin/v1/devices", "")
 	if code != 200 {
 		t.Fatalf("status %d: %s", code, b)
 	}
@@ -295,46 +292,26 @@ func TestGetDevices(t *testing.T) {
 }
 
 func TestMethodsAndUnknownPaths(t *testing.T) {
-	srv := serve(t, newFake(t), "")
-	code, b := do(t, srv, "POST", "/admin/v1/state", "", "")
+	srv := serve(t, newFake(t))
+	code, b := do(t, srv, "POST", "/admin/v1/state", "")
 	wantError(t, code, b, 405)
-	code, b = do(t, srv, "GET", "/admin/v1/faults", "", "")
+	code, b = do(t, srv, "GET", "/admin/v1/faults", "")
 	wantError(t, code, b, 405)
-	code, b = do(t, srv, "GET", "/admin/v1/nope", "", "")
+	code, b = do(t, srv, "GET", "/admin/v1/nope", "")
 	wantError(t, code, b, 404)
-}
-
-func TestToken(t *testing.T) {
-	srv := serve(t, newFake(t), "s3cret")
-	for _, tok := range []string{"", "wrong", "s3cret2"} {
-		code, b := do(t, srv, "GET", "/admin/v1/state", "", tok)
-		wantError(t, code, b, 401)
-	}
-	if code, b := do(t, srv, "GET", "/admin/v1/state", "", "s3cret"); code != 200 {
-		t.Fatalf("right token: %d %s", code, b)
-	}
-	// The events stream is covered too.
-	resp, err := srv.Client().Get(srv.URL + "/admin/v1/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 401 {
-		t.Fatalf("events without token: %d", resp.StatusCode)
-	}
 }
 
 // TestConcurrentPutsDifferentEndpoints is the lost-update case: PUTs to
 // different endpoints at once must all survive. Run under -race.
 func TestConcurrentPutsDifferentEndpoints(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 	const n = 50
 	var wg sync.WaitGroup
 	put := func(path string, body func(i int) string) {
 		defer wg.Done()
 		for i := 1; i <= n; i++ {
-			if code, b := do(t, srv, "PUT", path, body(i), ""); code != 200 {
+			if code, b := do(t, srv, "PUT", path, body(i)); code != 200 {
 				t.Errorf("%s: %d %s", path, code, b)
 				return
 			}
@@ -399,7 +376,7 @@ func waitSubscribed(t *testing.T, b *activity.Bus) {
 func TestEventsUnderLoad(t *testing.T) {
 	f := newFake(t)
 	f.bus = activity.NewBus(50, 0)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	data, closeFn := sseReader(t, ctx, srv.URL+"/admin/v1/events?sample=1")
@@ -442,9 +419,9 @@ func TestEventsUnderLoad(t *testing.T) {
 }
 
 func TestEventsSampleValidation(t *testing.T) {
-	srv := serve(t, newFake(t), "")
+	srv := serve(t, newFake(t))
 	for _, q := range []string{"0", "1.5", "-1", "x"} {
-		code, b := do(t, srv, "GET", "/admin/v1/events?sample="+q, "", "")
+		code, b := do(t, srv, "GET", "/admin/v1/events?sample="+q, "")
 		wantError(t, code, b, 400)
 	}
 }
@@ -453,7 +430,7 @@ func TestEventsSampleValidation(t *testing.T) {
 // down, so it cannot hold up Shutdown, and unsubscribes.
 func TestEventsEndOnShutdown(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 	data, closeFn := sseReader(t, context.Background(), srv.URL+"/admin/v1/events")
 	defer closeFn()
 	waitSubscribed(t, f.bus)
@@ -477,7 +454,7 @@ func TestEventsEndOnShutdown(t *testing.T) {
 // body, returns the state without bumping generation.
 func TestNoOpPutKeepsGeneration(t *testing.T) {
 	f := newFake(t)
-	srv := serve(t, f, "")
+	srv := serve(t, f)
 	for _, c := range []struct{ path, body string }{
 		{"/admin/v1/behaviour", `{}`},
 		{"/admin/v1/behaviour", `{"max_sessions": 5000}`},
@@ -485,7 +462,7 @@ func TestNoOpPutKeepsGeneration(t *testing.T) {
 		{"/admin/v1/active", `{"active_devices": 3}`},
 		{"/admin/v1/profiles", `{"rules": []}`},
 	} {
-		code, b := do(t, srv, "PUT", c.path, c.body, "")
+		code, b := do(t, srv, "PUT", c.path, c.body)
 		if code != 200 {
 			t.Fatalf("%s %s: %d %s", c.path, c.body, code, b)
 		}
@@ -493,7 +470,7 @@ func TestNoOpPutKeepsGeneration(t *testing.T) {
 			t.Errorf("%s %s: generation bumped to %d", c.path, c.body, g)
 		}
 	}
-	code, b := do(t, srv, "PUT", "/admin/v1/behaviour", `{"max_sessions": 4999}`, "")
+	code, b := do(t, srv, "PUT", "/admin/v1/behaviour", `{"max_sessions": 4999}`)
 	if code != 200 || decodeState(t, b).Generation != 2 {
 		t.Fatalf("a real change must bump: %d %s", code, b)
 	}

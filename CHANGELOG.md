@@ -8,17 +8,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Breaking
 
-- **The `rcfg-sim@.service` unit's `HOST_KEY` default is now
-  `/opt/rcfg-sim/host-keys/<IP>.key`**, and `/etc/rcfg-sim` is no longer in its
-  `ReadWritePaths=`. `make install` also makes `/etc/rcfg-sim` `root:rcfgsim-ui 2770`, so the
-  device processes (user `rcfgsim`) can no longer read or write anything there. An instance
-  whose env file leaves `HOST_KEY` out, or sets it under `/etc/rcfg-sim`, will generate a new
-  host key at the new path on its next start, and SSH clients will see a changed host key.
-  The binary's own `--host-key` default is unchanged.
+- The `rcfg-sim@.service` unit now defaults `HOST_KEY` to `/opt/rcfg-sim/host-keys/<IP>.key` and can no longer read `/etc/rcfg-sim`. Instances that kept their key there will generate a new one (and SSH clients will see a changed host key) unless you move it first.
 
 #### Migration
-
-Move each instance's existing key and point the env file at it, before restarting:
 
 ```bash
 sudo install -d -m 0700 -o rcfgsim -g rcfgsim /opt/rcfg-sim/host-keys
@@ -32,322 +24,92 @@ for env in /etc/rcfg-sim/*.env; do
     echo "HOST_KEY=/opt/rcfg-sim/host-keys/$ip.key" | sudo tee -a "$env" >/dev/null ;;
   esac
 done
-sudo make install && sudo systemctl daemon-reload
-sudo systemctl restart 'rcfg-sim@*'
+sudo make install && sudo systemctl daemon-reload && sudo systemctl restart 'rcfg-sim@*'
 ```
 
 ### Added
 
-- **Device profiles**: a fixed behaviour per device, for reproducing the same misbehaving
-  devices on every run (RCO-1693). Profiles: `hang:<duration>`, `latency:<min>-<max>`,
-  `refuse`, `disconnect`. See [Device profiles](README.md#device-profiles).
-- `--device-profiles` assigns profiles to a share of the fleet, e.g. `hang:3600s@3%`.
-  `--profile-seed` (default 42) decides which devices; the same seed always picks the same
-  hostnames.
-- Optional 11th manifest column `profile`, pinning one device to one profile. Manifests
-  without it load unchanged.
-- `--max-session` (default `5m`) sets how long a session may last before the simulator
-  closes it. Raise it for `latency` devices whose sessions run past 5 minutes, or the
-  simulator, not the client under test, ends them. A `hang` device still adds its hang.
-- `--fault-rates` (env `FAULT_RATES`) sets a probability per fault type, e.g.
-  `auth_fail=0.02,disconnect_mid=0.005`. Types not listed never fire. `--fault-rate` and
-  `--fault-types` still work and mean the same as giving every listed type that rate. Setting
-  `--fault-rates` with a non-zero `--fault-rate` or a non-empty `--fault-types` is an error.
-- `--active-devices` (env `ACTIVE_DEVICES`, default `all`) limits how many devices, in port
-  order, accept sessions. The rest drop connections like the `refuse` profile.
-- The `rcfg-sim@.service` unit now passes `--ssh-auth`, `--commands-root`, `--max-session`,
-  `--device-profiles`, `--profile-seed`, `--fault-rates` and `--active-devices`, read from the
-  new env variables `SSH_AUTH`, `COMMANDS_ROOT`, `MAX_SESSION`, `DEVICE_PROFILES`,
-  `PROFILE_SEED`, `FAULT_RATES` and `ACTIVE_DEVICES`. The env sample documents them.
-- **Admin API** (off by default): `--admin` (env `ADMIN`) serves `/admin/v1/*` on the
-  `--metrics-addr` listener, to read and change faults, device profiles, response delay, the
-  session cap and active devices at runtime, for new sessions, and to read live activity:
-  `GET state`, `PUT faults`, `PUT profiles`, `PUT behaviour`, `PUT active`, `GET devices`
-  (a state code and last-seen time per device) and `GET events` (a sampled, rate-capped
-  server-sent event stream). `--admin-token` (env `ADMIN_TOKEN`) requires a bearer token.
-  Changes are not persisted. See [Admin API](README.md#admin-api).
-- `make build` stamps the version (`git describe`) into `rcfg-sim`; the admin API reports it.
-- **Web UI**: a new, optional binary `rcfg-sim-ui` and unit `rcfg-sim-ui.service` (not
-  enabled by `make install`). Fleet screen: instance cards with state, sessions, active
-  devices, bytes/s and drift between live config and env file; start, stop, restart and
-  rolling restart; fleet-wide active devices, response delay and per-instance session caps.
-  Failures screen: per-type fault rates, device profile rules and seed, the list of affected
-  hostnames, and presets (three built in). Every change is written to the instance env files.
-  Flags `--ui-addr`, `--ui-token`, `--env-dir`, `--admin-token`, `--gen-bin`, `--data-dir`,
-  `--poll`, `--systemctl`, `--log-level`; tokens fall back to `UI_TOKEN` and `ADMIN_TOKEN`.
-  See [Web UI](README.md#web-ui).
-- `make install-ui` / `make uninstall-ui`: the `rcfgsim-ui` user, the UI binary and unit, a
-  polkit rule letting that user start, stop and restart `rcfg-sim@*.service` only, and
-  `/etc/rcfg-sim-ui/rcfg-sim-ui.env`. `make ui-gen` and `make ui-check` rebuild and check the
-  committed templ and CSS output.
-- `rcfg-sim` reads `ADMIN_TOKEN` from the environment when `--admin-token` is not set.
-- **Web UI Activity screen**: a whole-fleet heatmap of device state with legend counts, hover
-  and a device panel (address, profile, recent events); live charts over a 10-minute window
-  (active sessions, sessions/s by outcome, bytes/s, faults/s by type), computed from each
-  instance's `/metrics` counters with counter resets handled; and a sampled event tail with
-  filters and pause. While the page is open the UI holds one event stream per instance and
-  polls `/admin/v1/devices`; with no browser on it, it holds no instance connections.
-- The UI vendors htmx-ext-sse 2.2.4 and uPlot 1.6.32 (pinned, checksums in
-  `internal/ui/web/static/VERSIONS`), served from the UI itself like everything else.
+- Device profiles (`hang`, `latency`, `refuse`, `disconnect`) give chosen devices the same misbehaviour on every run. Assign them to a share of the fleet with `--device-profiles` and `--profile-seed`, or pin one device with a new optional `profile` manifest column. See [Device profiles](README.md#device-profiles).
+- `--fault-rates` sets a separate probability for each fault type, e.g. `auth_fail=0.02,disconnect_mid=0.005`.
+- `--active-devices` limits how many devices accept sessions, and `--max-session` (default `5m`) sets how long a session may last.
+- The systemd unit passes the new flags through env variables, and every variable now falls back to the flag's default when left out.
+- An optional admin API (`--admin`) lets you change faults, profiles, delays and active devices at runtime and watch live activity. It has no authentication, so keep `--metrics-addr` on loopback. See [Admin API](README.md#admin-api).
+- New optional web UI, `rcfg-sim-ui`, with a single-user login. It has Fleet, Failures, Build and Activity screens for controlling instances, setting up faults, regenerating the fleet and watching live traffic. Install it with `make install-ui`; see [Web UI](README.md#web-ui).
+- `make adopt-data` moves an existing install's configs and manifest into the versioned `data/` layout used by the Build screen.
 
 ### Changed
 
-- Building from source now needs **Go 1.26 or later** (was 1.24). `go.mod` sets the floor
-  and CI tests 1.26 and 1.27. The web UI's templ dependency needs 1.26.
-- The 5-minute session cap is extended by the hang for a `hang` device, so long hangs are
-  not cut short. Sessions on other devices keep the 5-minute cap.
-- The `rcfg-sim@.service` unit sets a default for every variable it uses (the flag default;
-  `LISTEN_IP` defaults to the instance name) before reading the env file. Existing env files
-  work unchanged, and a variable left out now takes the flag default instead of an empty
-  value. Reinstall the unit (`make install` or copy it) and run `systemctl daemon-reload`.
-- Faults, device profiles, response delays, the session cap and the active device count are
-  now held in a runtime config that is read once per session, ready for runtime changes in
-  a later release. The session cap is a counter instead of a fixed-size semaphore. No change
-  in behaviour.
-- The "fault injection active" log line reports `rates` (e.g. `auth_fail=0.02`) in place of
-  the separate `rate` and `types` fields.
-- The `rcfg-sim@.service` unit no longer puts `--admin-token` on the command line, where any
-  local user could read it with `ps`; `rcfg-sim` gets `ADMIN_TOKEN` from the env file's
-  environment instead. Reinstall the unit and `systemctl daemon-reload`.
-- `make install` sets `/etc/rcfg-sim` to `root:rcfgsim-ui 2770` and its `*.env` files to
-  `0660` group `rcfgsim-ui`, creating that group if needed (see Breaking). The README's
-  install steps match.
-- An admin API `PUT` that changes nothing (including an empty `{}`) returns the state without
-  bumping `generation`.
-- `golang.org/x/sys` is v0.48.0 (was v0.38.0), the version the UI's templ dependency needs.
-- Web UI Apply: a down instance's env file is now written with the change ("applies on next
-  start") instead of being left on old settings, and an instance that accepts part of a change
-  (faults but not profiles) has exactly the accepted settings written to its env file.
-- Web UI active devices: the fleet target is split across down instances too, by their
-  `PORT_COUNT`, and a down instance's share is written to its `ACTIVE_DEVICES`.
+- Building from source now needs Go 1.26 or later.
+- A `hang` device's session cap is extended by the length of its hang, so long hangs are no longer cut short.
+- `make install` gives `/etc/rcfg-sim` to group `rcfgsim-ui` so the web UI can edit env files.
 
 ## [0.0.5] — 2026-09-27
 
 ### Breaking
 
-- **Ciena neighbour discovery now answers `RTRV-NE-LIST` with the real 6500 record shape**
-  (`"SHELF-1::SID=\"X\",NENAME=\"X\",GNE=NO,GNEIPADDR=,INETADDR=...,COST=...,NETYPE=..."`),
-  replacing `RTRV-NBR` and its invented `PROTOCOL=OSC,REACHABLE=YES` payload. The old command
-  and format were not taken from hardware, and no real node answers them. **Breaking** for
-  anything parsing the previous output. The metric label follows the verb:
-  `CmdTL1RtrvNbr` becomes `CmdTL1RtrvNeList`.
-
-- rcfg-sim now **refuses to start** when a manifest names a driver id no driver is registered
-  for, instead of silently serving those devices as Cisco IOS. An empty `template` value still
-  means `cisco_ios`.
+- Ciena neighbour discovery now uses `RTRV-NE-LIST` with the real 6500 response format, replacing the invented `RTRV-NBR`. The metric label changes from `CmdTL1RtrvNbr` to `CmdTL1RtrvNeList`.
+- rcfg-sim now refuses to start when the manifest names an unknown driver, instead of quietly serving it as Cisco IOS.
 
 #### Migration
 
-```text
-# Ciena neighbour discovery: send the new verb and parse the 6500 record shape
-RTRV-NBR:<tid>:<ctag>;        ->  RTRV-NE-LIST:<tid>:<ctag>;
-PROTOCOL=OSC,REACHABLE=YES    ->  "SHELF-1::SID=\"X\",NENAME=\"X\",GNE=NO,...,NETYPE=..."
-
-# Dashboards and alerts on the command label
-rcfgsim_command_duration_seconds{command="CmdTL1RtrvNbr"}
-  -> rcfgsim_command_duration_seconds{command="CmdTL1RtrvNeList"}
-```
-
-A manifest that now fails with `manifest names unknown driver(s) in the template column: X`
-had a typo'd or unsupported id that was being served as Cisco IOS. Correct the id, or set the
-column to `cisco_ios` (or leave it empty) to keep the old behaviour.
+Send `RTRV-NE-LIST:<tid>:<ctag>;` instead of `RTRV-NBR` and update dashboards to `command="CmdTL1RtrvNeList"`. Fix any manifest `template` value the new startup error reports, or set it to `cisco_ios`.
 
 ### Added
 
-- **Infinera DTN-X TL1 (`infinera-dtnx-tl1`)** and **Cisco ONS 15454 TL1 (`cisco-ons15454-tl1`)**
-  models and drivers, joining Ciena on the shared TL1 core. Both are gateway personalities:
-  one addressable node whose config carries the inventories of the elements behind it.
-  Infinera answers `RTRV-TIDMAP` with keyword records and an empty AID; Cisco answers
-  `RTRV-MAP-NETWORK` with **positional** records (`"<IPADDR>,<NODENAME>,<PRODUCT>"`). Three
-  vendors, three different neighbour grammars, which is the point.
-- **Infinera pages its RTRV-TIDMAP response**, as a real DTN-X does: every block but the last
-  is coded `RTRV` rather than `COMPLD`, with the prompt written between blocks. A client that
-  reads to the first prompt gets a partial answer and leaves the rest on the wire, where it
-  surfaces as the reply to the next command. Simulating that is the only way the behaviour can
-  be tested.
-- **Infinera keeps its own system name in the response header** when relaying for another
-  node, so a client cannot verify routing by comparing the header SID to the TID it addressed.
-  Pinned by test, because it is easy to mistake for a bug and "fix".
-- **Command files (`--commands-root DIR`)** — a device answers any CLI command with the
-  contents of `DIR/<hostname>/<slug>.txt`, where the slug is the command lowercased, whitespace
-  collapsed, a trailing `| no-more` removed and spaces turned into `_`. The file is checked before
-  the driver's built-in commands, sent with CRLF line endings, and followed by the usual prompt; a
-  missing file falls through to existing behaviour. A device's folder is listed once and each file
-  read on first hit, both cached until restart. Applies to `cisco_ios` and `junos`. Off by default,
-  and output is byte-identical with the flag unset.
-- **`junos` driver** — a minimal Juniper Junos operational-mode CLI: `<user>@<hostname>> ` prompt,
-  no enable mode, silent `set cli screen-length` / `screen-width`, `show configuration` (with
-  optional `| display set` / `| no-more`) served from the device's config file, and the Junos
-  caret-plus-`unknown command.` error. Selected by `junos` in the manifest `template` column; the
-  generator does not produce `junos` rows. Arista EOS runs on `cisco_ios` with command files and
-  has no driver of its own.
-- **`file` command metric label** — every command-file response is recorded as
-  `rcfgsim_command_duration_seconds{command="file"}`, one series however many commands are
-  file-backed. Pre-registered only when `--commands-root` is set. The `junos` driver adds
-  `CmdJunosSetCli` and `CmdJunosShowConfiguration`.
-- **`scenarios/mesh-campus/`** — a three-device multi-vendor campus (Arista EOS core, Juniper vMX
-  distribution, Cisco C2960X access) with LLDP/CDP neighbour and interface output that agrees end
-  to end, for testing topology discovery such as rConfig Mesh. Includes a manifest, configs,
-  command files and a [playbook](scenarios/mesh-campus/PLAYBOOK.md), and is exercised by the
-  `TestMeshCampus_CommandFiles` integration test.
+- New Infinera DTN-X (`infinera-dtnx-tl1`) and Cisco ONS 15454 (`cisco-ons15454-tl1`) TL1 gateway models. Each uses its vendor's own neighbour-listing format, and Infinera splits long responses across pages the way real hardware does.
+- `--commands-root DIR` lets a device answer any command from `DIR/<hostname>/<slug>.txt`, for `cisco_ios` and `junos` devices.
+- New minimal Juniper `junos` driver for `show configuration` and `set cli` commands.
+- New `scenarios/mesh-campus/` with three multi-vendor devices whose neighbour data agrees, for testing topology discovery.
 
 ### Changed
 
-- **Dual-homed RNEs (`--rne-dual-home-pct`)** — that percentage of each GNE's remote NEs is
-  drawn from a fleet-wide shared pool instead of a private one, so the same RNE is reachable
-  through several gateways, as operators deploy them for resilience. A shared RNE's shelf is
-  derived from its TID, so every gateway fronting it renders byte-identical equipment and a
-  client can recognise the paths as one device; a private RNE now carries its gateway's index
-  (`RNE-LAX0007`) so two gateways cannot collide on a city name and serve unrelated equipment
-  under one TID. Gateways are additionally chained — device N always shares an `RNE-LINK<N>`
-  element with device N+1, as optical networks dual-home an RNE between neighbouring gateways —
-  so any two adjacent ports demonstrate dual-homing on every seed instead of only when a random
-  draw collides. Links count towards a gateway's documented 2–5 remote NEs. Defaults to 0, which
-  takes no extra draw from the generator stream and leaves output byte-identical to a build
-  without the option.
+- `--rne-dual-home-pct` makes a share of remote NEs reachable through several gateways, as real optical networks are built. It defaults to 0, so output is unchanged unless you set it.
 
 ### Fixed
 
-- **Integration tests no longer fail intermittently with `bind: address already in use`.**
-  The `freePort` helper bound port 0, closed the listener, and let the server bind the port
-  later; port 0 comes from the kernel's ephemeral range, so in that gap the suite's own outgoing
-  SSH and HTTP connections could take it as a source port. Multi-device servers also bound
-  `port+1`… unchecked. Test ports now come from below the ephemeral range (20000–32000), as
-  contiguous blocks that are checked before use and handed out in increasing order.
-- **`TestFault_DisconnectMid_HardCloses` no longer fails about one run in twenty.** The fault
-  closes with `SO_LINGER=0`, which discards unsent bytes, so a session can lose the whole config
-  prefix; the test required every session to show one. It now requires every session to be
-  truncated and at least one of up to five to show a prefix. Fault behaviour is unchanged.
-- **TL1 `ACT-USER` now accepts a quoted password** — a real 6500 requires a complex password to be
-  wrapped in double quotes, which rConfig now always sends; the parser compared the literal `"pw"`
-  against the configured password and denied every login, and truncated a password containing `:`.
-  The bare form is still accepted, and `;` inside a quoted string no longer terminates the command.
+- TL1 `ACT-USER` now accepts quoted passwords.
+- Fixed two integration tests that failed now and then: one on port collisions, one on a race.
 
 ## [0.0.4] — 2026-06-07
 
 ### Added
 
-- **Ciena GNE/RNE topology** — new model `ciena-6500-tl1-gne`: a 6500 acting as a Gateway NE
-  (GNE) that fronts 2–5 Remote NEs (RNEs) reachable only through it. The generator writes each
-  RNE's shelf inventory into the device's config (delimited sections); the `ciena_tl1` driver
-  indexes them at session start and routes `RTRV-*` commands to an RNE by its TID
-  (`RTRV-EQPT:RNE-LIMERICK:3;`), streaming that RNE's inventory zero-copy with the RNE's TID as
-  the response SID. New verb **`RTRV-NBR`** lists the RNEs behind a GNE. Unknown/unreachable TID
-  returns TL1 `DENY`/`IIAC`. The existing `ciena-6500-tl1` model is unchanged (standalone node,
-  byte-identical output); the TL1 command parser now also accepts the short `VERB:TID:CTAG` form.
+- New `ciena-6500-tl1-gne` model: a Ciena gateway node that relays `RTRV-*` commands to 2–5 remote nodes behind it, addressed by their TID.
 
 ## [0.0.3] — 2026-06-06
 
-### Changed
-
-- Minimum supported Go is now **1.24** (required by `golang.org/x/crypto` and
-  `golang.org/x/sys`, and declared in `go.mod`). CI tests Go 1.24 and 1.25; the 1.22/1.23
-  matrix entries are removed since neither toolchain satisfies the `go 1.24.0` directive.
-
 ### Added
 
-- **Multi-vendor device-driver framework.** The SSH server now selects a per-device
-  personality ("driver") from the manifest `template` column at session start, so new
-  vendors/models are added as one self-contained driver file plus one generator model
-  entry. The Cisco IOS behaviour is preserved byte-for-byte (extracted verbatim into the
-  `cisco_ios` driver); the manifest `vendor`/`template` columns — previously written but
-  unused at runtime — are now the live wiring. No CSV schema change.
-- **Ciena 6500 7-slot optical model (`ciena-6500-tl1`).** A TL1 personality reached over
-  SSH: a bare `<` prompt, an in-band `ACT-USER::<user>:<ctag>::<pass>;` login gate (commands
-  before login return TL1 `DENY`), and `;`-terminated `RTRV-*` verbs returning `COMPLD`
-  blocks. Supported verbs: `RTRV-EQPT`, `RTRV-ALM-ALL`, `RTRV-COND-ALL`, `RTRV-ACTIVE-USER`,
-  `RTRV-SW-VER`, `RTRV-SYS`. The generator emits a deterministic `RTRV-EQPT::ALL` shelf
-  inventory per device, mmap-streamed zero-copy at runtime (and subject to the same fault
-  injection as Cisco config streams). Select it via `--distribution`, e.g.
-  `--distribution sm:50,ciena-6500-tl1:50`.
-- New `command` label values on `rcfgsim_command_duration_seconds` for the TL1 verbs
-  (`CmdTL1ActUser`, `CmdTL1RtrvEqpt`, …), pre-registered at zero. No new metric names or
-  label keys; cardinality stays within the asserted bound.
-- **`--ssh-auth` server flag** to model both real-world TL1 access patterns:
-  `password` (default — SSH password auth for every device, unchanged), `driver` (per-driver:
-  Cisco authenticates at the SSH layer, Ciena TL1 does not — `ACT-USER` is the only gate), and
-  `none` (no SSH auth for any device). Each driver declares `RequiresSSHAuth()`; `driver` mode
-  honours it so mixed Cisco/Ciena fleets behave correctly. In a no-auth mode the SSH client
-  connects unchallenged and authenticates in-band; the `auth_fail` fault and `auth_attempts`
-  metric do not apply.
+- Multi-vendor driver framework: the manifest `template` column now picks each device's CLI behaviour. Cisco output is unchanged.
+- New Ciena 6500 TL1 model (`ciena-6500-tl1`) with `ACT-USER` login and the common `RTRV-*` commands.
+- `--ssh-auth` (`password`, `driver`, `none`) controls whether devices ask for an SSH password, to match how real TL1 devices are reached.
+
+### Changed
+
+- Building from source now needs Go 1.24 or later.
 
 ## [0.0.2] — 2026-05-19
 
-Bucket-label rename and five new stress-test size tiers. Breaking change: every `--distribution` string and every `size_bucket` value in existing manifests is invalidated. Migration is a mechanical rename — see below.
-
 ### Breaking
 
-- **Renamed all four size buckets** to clothing-size labels:
-  - `small` → `sm`
-  - `medium` → `md`
-  - `large` → `lg`
-  - `huge` → `xl`
-- **Renamed the corresponding templates** under `internal/configs/templates/`: `small.tmpl` → `sm.tmpl`, `medium.tmpl` → `md.tmpl`, `large.tmpl` → `lg.tmpl`, `huge.tmpl` → `xl.tmpl`.
-- **Changed the `--distribution` default** on `rcfg-sim-gen` from `"small:40,medium:40,large:15,huge:5"` to `"sm:40,md:40,lg:15,xl:5"`.
-- **Manifest `size_bucket` column values** now emit the new labels. Any rConfig group import or downstream tool that filters on bucket names must be updated.
+- Size buckets were renamed `small`/`medium`/`large`/`huge` → `sm`/`md`/`lg`/`xl`, which breaks existing `--distribution` strings and manifests.
 
 #### Migration
 
 ```bash
-# Old invocation:
-rcfg-sim-gen --distribution "small:40,medium:40,large:15,huge:5"
-
-# New invocation (identical distribution):
-rcfg-sim-gen --distribution "sm:40,md:40,lg:15,xl:5"
+rcfg-sim-gen --distribution "sm:40,md:40,lg:15,xl:5"   # was small:40,medium:40,large:15,huge:5
+sed -i 's/,small$/,sm/; s/,medium$/,md/; s/,large$/,lg/; s/,huge$/,xl/' manifest.csv
 ```
-
-For pre-generated manifests, either regenerate or `sed -i 's/,small$/,sm/; s/,medium$/,md/; s/,large$/,lg/; s/,huge$/,xl/' manifest.csv`.
 
 ### Added
 
-- **Five new stress-test size tiers** above `xl`, accessible from `rcfg-sim-gen --distribution`:
-  - `2xl` — ~8 MB hint, ~6 MB realised (256 interfaces, 100 ACLs, 6 K static routes, 30 BGP neighbours, 50 VRFs).
-  - `3xl` — ~16 MB hint, ~13 MB realised (384 interfaces, 160 ACLs, 12 K static routes, 40 BGP, 70 VRFs).
-  - `4xl` — ~32 MB hint, ~25 MB realised (512 interfaces, 240 ACLs, 24 K static routes, 60 BGP, 100 VRFs).
-  - `5xl` — ~64 MB hint, ~52 MB realised (768 interfaces, 380 ACLs, 48 K static routes, 100 BGP, 150 VRFs).
-  - `6xl` — ~128 MB hint, ~107 MB realised (1024 interfaces, 600 ACLs, 96 K static routes, 160 BGP, 220 VRFs).
-
-  These tiers share the existing `xl` template via a template alias map — they differ from `xl` only in profile counts, not in feature set, so adding them costs ~80 lines of profile data with no duplicated boilerplate.
-
-### Changed
-
-- The "unknown bucket" error from `rcfg-sim-gen --distribution` now lists valid bucket names dynamically rather than hard-coding the v1 list.
-- README, `TEST-SCENARIOS.md`, and `FEATURE-TESTS.md` updated for the new bucket labels; the size-bucket table in the README now documents all nine tiers.
-- Added [CLAUDE.md](CLAUDE.md) with project rules for versioning, commit conventions, and release workflow.
+- Five larger stress-test sizes, `2xl` to `6xl`, from about 6 MB to about 107 MB per config.
 
 ## [0.0.1] — 2026-04-21
 
-Initial public release. High-density Cisco IOS SSH simulator for load testing [rConfig](https://www.rconfig.com).
-
 ### Added
 
-- **50,000+ concurrent SSH listeners** on a single host via `mmap`'d configs — `MAP_SHARED`/`PROT_READ`, zero-copy delivery on the hot path.
-- **Real Cisco IOS emulation**: enable mode, Cisco-style abbreviated commands (`sh run` → `show running-config`), ambiguity detection, realistic prompts (`>` / `#`), deterministic per-device serial numbers, the ten-or-so commands rConfig's stock collection template issues (`terminal length 0`, `terminal pager 0`, `enable`, `show version`, `show running-config`, `show startup-config`, `show inventory`, `exit` / `quit` / `logout` / `end`).
-- **Deterministic config generator** (`rcfg-sim-gen`): four size buckets (small ~30 KB to huge ~5 MB) with parameterised hostnames, ACLs, interfaces, VLANs, routing, AAA stanzas; 200 fictional sites; seeded RNG produces byte-identical output across runs; parallel rendering sized to `runtime.NumCPU()`.
-- **Prometheus metrics** with bounded label cardinality (verified by test): `rcfgsim_active_sessions`, `rcfgsim_sessions_total{result}`, `rcfgsim_session_duration_seconds`, `rcfgsim_command_duration_seconds{command}`, `rcfgsim_bytes_sent_total`, `rcfgsim_auth_attempts_total{result}`, `rcfgsim_handshake_duration_seconds`, `rcfgsim_faults_injected_total{type}`. Plus standard Go runtime + process collectors. `/healthz` for liveness.
-- **Four fault injection types** with per-session RNG and verified zero overhead when disabled: `auth_fail` (reject handshake), `disconnect_mid` (TCP RST during `show running-config`), `slow_response` (10–50× delay multiplier), `malformed` (truncate / inject marker / bit-flip). Each independently toggleable via `--fault-types`.
-- **Systemd-native operation**: one `rcfg-sim@<LISTEN_IP>.service` instance per IP alias, independent restart, graceful drain (up to 30 s) via SIGTERM, per-instance env file at `/etc/rcfg-sim/<IP>.env`, journal logging with structured JSON, sandbox hardening (`NoNewPrivileges`, `ProtectSystem=full`, `PrivateTmp`).
-- **Deployment artifacts**: `deploy/systemd/rcfg-sim@.service` template unit, `deploy/ip-aliases.sh` for batched idempotent IP alias management, `deploy/sysctl-rcfg-sim.conf` tuning drop-in, `deploy/limits-rcfg-sim.conf` for interactive use.
-- **Makefile targets**: `build`, `test`, `integration`, `bench`, `vet`, `fmt`, `install`, `uninstall`, `generate-configs`, `deploy-aliases`, `remove-aliases`.
-- **Documentation**: comprehensive README (quickstart through production runbook), [FEATURE-TESTS.md](FEATURE-TESTS.md) with 36 runnable manual feature-verification procedures, [TEST-SCENARIOS.md](TEST-SCENARIOS.md) with 9 end-to-end load-testing scenarios, [SECURITY.md](SECURITY.md) reporting policy.
-- **CI**: GitHub Actions workflow testing `go vet`, `gofmt`, unit + integration tests, and build across Go 1.22 / 1.23 / 1.24.
-
-### Security
-
-- Password auth only; no SSH public key auth (out of scope for the rConfig collection flow).
-- Documented test credentials (`admin` / `admin` / `enable123`) are for lab use — not production secrets.
-- Metrics endpoint exposes only bounded label sets; no hostname or session-ID labels that could leak cardinality.
-- Systemd unit runs as unprivileged `rcfgsim` user under sandbox; `LimitNOFILE=200000`.
-
-### Known limitations
-
-- Single-host scale: target is 50k devices on one Rocky 9 box; horizontal scaling across hosts is out of scope.
-- Cisco IOS only — no multi-vendor emulation.
-- No SSH config mutation (`configure terminal`, `write memory`, etc. return `% Invalid input`).
-- `show startup-config` returns the same bytes as `show running-config` by design in v1.
-- IPv4 only; no IPv6 listener binding.
-
-See [README § Known limitations](README.md#known-limitations) for the full list.
+- First public release: a Cisco IOS SSH simulator that serves 50,000+ devices from one host, plus a deterministic config generator, Prometheus metrics, fault injection and systemd deployment files.
 
 [Unreleased]: https://github.com/rconfig/rconfig-sim/compare/v0.0.5...HEAD
 [0.0.5]: https://github.com/rconfig/rconfig-sim/releases/tag/v0.0.5

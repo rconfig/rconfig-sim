@@ -138,6 +138,10 @@ func (s *Server) rollingView() views.RollingView {
 }
 
 func (s *Server) rollingRestart(w http.ResponseWriter, r *http.Request) {
+	if s.opt.Jobs != nil && s.opt.Jobs.Running() {
+		s.fail(w, r, "A build or rollback is running; it does its own rolling restart.")
+		return
+	}
 	pause, err := strconv.Atoi(strings.TrimSpace(r.FormValue("pause")))
 	if err != nil || pause < 0 || pause > 600 {
 		s.fail(w, r, "Pause must be 0 to 600 seconds.")

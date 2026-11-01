@@ -46,7 +46,6 @@ type Instance struct {
 
 // Options for a fake instance.
 type Options struct {
-	Token    string
 	Devices  int    // default 4
 	ExtraEnv string // appended to the env file
 	// EventRate caps each /admin/v1/events stream, events per second, as
@@ -80,7 +79,7 @@ func Start(t *testing.T, envDir, ip string, opt Options) *Instance {
 		in.Hosts = append(in.Hosts, fmt.Sprintf("rtr-%s-%d", ip, i))
 	}
 	api := admin.Handler(in, admin.Options{
-		Version: "test", ListenIP: ip, PortStart: 10000, PortCount: opt.Devices, Devices: opt.Devices, Token: opt.Token,
+		Version: "test", ListenIP: ip, PortStart: 10000, PortCount: opt.Devices, Devices: opt.Devices,
 		DroppedEvery: opt.DroppedEvery,
 	})
 	mux := http.NewServeMux()

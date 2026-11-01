@@ -53,7 +53,7 @@ func adminServer(t *testing.T, withAdmin bool) (*sshsrv.Server, int, string) {
 	if withAdmin {
 		srv.Mount(admin.Prefix, admin.Handler(srv, admin.Options{
 			Version: "test", ListenIP: cfg.ListenIP, PortStart: cfg.PortStart, PortCount: cfg.PortCount,
-			Devices: srv.DeviceCount(), Token: "tok",
+			Devices: srv.DeviceCount(),
 		}))
 	}
 	if err := srv.Start(); err != nil {
@@ -66,7 +66,6 @@ func adminServer(t *testing.T, withAdmin bool) (*sshsrv.Server, int, string) {
 func adminCall(t *testing.T, method, url, body string) (int, []byte) {
 	t.Helper()
 	req, _ := http.NewRequest(method, url, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
@@ -100,7 +99,6 @@ func TestAdmin_FaultsOverAPI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"events?sample=1", nil)
-	req.Header.Set("Authorization", "Bearer tok")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("events: %v", err)

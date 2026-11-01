@@ -309,6 +309,15 @@ func avgOr0(total int64, n int) int64 {
 	return total / int64(n)
 }
 
+// Models returns every model name --distribution accepts, in canonical order:
+// the Cisco size buckets, then the other vendors' models.
+func Models() []string { return append([]string(nil), modelOrder...) }
+
+// ParseDistribution validates a --distribution string exactly as the
+// generator does and returns each model's percent weight (every model
+// present, 0 when not listed).
+func ParseDistribution(s string) (map[string]int, error) { return parseDistribution(s) }
+
 // parseDistribution turns "sm:40,md:40,lg:15,xl:5" into a map of percent weights.
 func parseDistribution(s string) (map[string]int, error) {
 	weights := map[string]int{}

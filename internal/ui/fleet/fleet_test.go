@@ -125,9 +125,9 @@ func TestDesiredFromEnv(t *testing.T) {
 	}
 }
 
-func newFleet(t *testing.T, dir, token string, units fakeUnits) *Fleet {
+func newFleet(t *testing.T, dir string, units fakeUnits) *Fleet {
 	t.Helper()
-	f := New(Options{EnvDir: dir, AdminToken: token, Units: units})
+	f := New(Options{EnvDir: dir, Units: units})
 	f.Poll(context.Background())
 	return f
 }
@@ -142,17 +142,14 @@ func statuses(f *Fleet) map[string]Status {
 
 func TestPollStatuses(t *testing.T) {
 	dir := t.TempDir()
-	up := uitest.Start(t, dir, "127.0.0.1", uitest.Options{Token: "tok"})
-	down := uitest.Start(t, dir, "127.0.0.2", uitest.Options{Token: "tok"})
-	off := uitest.Start(t, dir, "127.0.0.3", uitest.Options{Token: "tok"})
-	wrongTok := uitest.Start(t, dir, "127.0.0.4", uitest.Options{Token: "other"})
+	uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
+	down := uitest.Start(t, dir, "127.0.0.2", uitest.Options{})
+	off := uitest.Start(t, dir, "127.0.0.3", uitest.Options{})
 	down.Down.Store(true)
 	off.AdminOff.Store(true)
-	_ = up
-	_ = wrongTok
 
-	f := newFleet(t, dir, "tok", fakeUnits{"127.0.0.2": "failed"})
-	want := map[string]Status{"127.0.0.1": StatusUp, "127.0.0.2": StatusDown, "127.0.0.3": StatusAdminOff, "127.0.0.4": StatusAuth}
+	f := newFleet(t, dir, fakeUnits{"127.0.0.2": "failed"})
+	want := map[string]Status{"127.0.0.1": StatusUp, "127.0.0.2": StatusDown, "127.0.0.3": StatusAdminOff}
 	if got := statuses(f); !mapsEqual(got, want) {
 		t.Fatalf("statuses: %v", got)
 	}
@@ -192,7 +189,7 @@ func mapsEqual[K comparable, V comparable](a, b map[K]V) bool {
 func TestBytesHistory(t *testing.T) {
 	dir := t.TempDir()
 	in := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	in.Bytes.Store(1_000_000)
 	f.Poll(context.Background())
 	v, _ := f.View("127.0.0.1")
@@ -224,7 +221,7 @@ func TestApplyFaultsFansOutAndPersists(t *testing.T) {
 	off := uitest.Start(t, dir, "127.0.0.4", uitest.Options{})
 	down.Down.Store(true)
 	off.AdminOff.Store(true)
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	offBefore, _ := os.ReadFile(off.EnvPath)
 
 	res := f.ApplyFaults(context.Background(), map[string]float64{"disconnect_mid": 0.005, "slow_response": 0.25})
@@ -282,7 +279,7 @@ func TestPartialApplyWritesOnlyAcceptedKeys(t *testing.T) {
 	up := uitest.Start(t, dir, "127.0.0.1", uitest.Options{ExtraEnv: "DEVICE_PROFILES=refuse@1%\n"})
 	down := uitest.Start(t, dir, "127.0.0.2", uitest.Options{ExtraEnv: "DEVICE_PROFILES=refuse@1%\n"})
 	down.Down.Store(true)
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 
 	// Rules adding up to 120%: valid syntax per rule, refused as a whole.
 	res := f.ApplyFailures(context.Background(), map[string]float64{"malformed": 0.5}, 9, []string{"refuse@60%", "disconnect@60%"})
@@ -311,7 +308,7 @@ func TestPartialApplyWritesOnlyAcceptedKeys(t *testing.T) {
 func TestDriftAndReapply(t *testing.T) {
 	dir := t.TempDir()
 	in := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	if v, _ := f.View(in.Name); len(v.Drift) != 0 {
 		t.Fatalf("fresh instance drift: %v", v.Drift)
 	}
@@ -341,7 +338,7 @@ func TestApplyActiveSplitsAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	a := uitest.Start(t, dir, "127.0.0.1", uitest.Options{Devices: 3})
 	b := uitest.Start(t, dir, "127.0.0.2", uitest.Options{Devices: 7})
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	res, err := f.ApplyActive(context.Background(), 5)
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +364,7 @@ func TestApplySessionCapsAndDelay(t *testing.T) {
 	dir := t.TempDir()
 	a := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
 	b := uitest.Start(t, dir, "127.0.0.2", uitest.Options{})
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	res := f.ApplySessionCaps(context.Background(), map[string]int64{"127.0.0.2": 9})
 	if len(res) != 1 || !res[0].OK() || b.Live().MaxSessions != 9 || a.Live().MaxSessions != 5000 {
 		t.Fatalf("caps: %+v a=%d b=%d", res, a.Live().MaxSessions, b.Live().MaxSessions)
@@ -432,7 +429,7 @@ func TestAffectedBy(t *testing.T) {
 	a := uitest.Start(t, dir, "127.0.0.1", uitest.Options{Devices: 50})
 	b := uitest.Start(t, dir, "127.0.0.2", uitest.Options{Devices: 50})
 	uitest.WriteManifest(t, dir, map[string]string{"rtr-127.0.0.2-0": "hang:7200s"}, a, b)
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 
 	got, err := f.AffectedBy(42, []string{"refuse@10%"})
 	if err != nil {
@@ -473,7 +470,7 @@ func TestApplyActiveIncludesDownInstances(t *testing.T) {
 	off := uitest.Start(t, dir, "127.0.0.3", uitest.Options{Devices: 5})
 	down.Down.Store(true)
 	off.AdminOff.Store(true)
-	f := newFleet(t, dir, "", nil)
+	f := newFleet(t, dir, nil)
 	offBefore, _ := os.ReadFile(off.EnvPath)
 
 	if max, active := f.ActiveDevicesTotal(); max != 10 || active != 3+7 {

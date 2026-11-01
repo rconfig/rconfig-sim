@@ -1229,16 +1229,16 @@ The manifest takes an optional 11th column, `profile`, holding one profile witho
 The admin API reads and changes an instance's faults, device profiles, response delay, session cap and active device count while it runs, and serves live activity: a state code per device and a sampled stream of session events. It is **off by default**. Turn it on with `--admin` (env `ADMIN=true`); it is served under `/admin/v1/` on the `--metrics-addr` listener, next to `/metrics` and `/healthz`. With `--admin` off, every `/admin/v1/` path returns 404.
 
 ```bash
-ADMIN_TOKEN="$TOKEN" rcfg-sim --admin --metrics-addr 127.0.0.1:9100 ...
+rcfg-sim --admin --metrics-addr 127.0.0.1:9100 ...
 
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9100/admin/v1/state
-curl -s -X PUT -H "Authorization: Bearer $TOKEN" \
+curl -s http://127.0.0.1:9100/admin/v1/state
+curl -s -X PUT \
   -d '{"auth_fail": 0.02, "disconnect_mid": 0.005}' http://127.0.0.1:9100/admin/v1/faults
 ```
 
 **Changes apply to new sessions only.** A session keeps the settings it started with. **Changes are not saved**: a restart reads the flags or env file again. To keep a change, write it to `/etc/rcfg-sim/<IP>.env` as well.
 
-**Security.** With a token set, every admin request must carry `Authorization: Bearer <token>`; `/metrics` and `/healthz` stay open. Set the token in the `ADMIN_TOKEN` environment variable (in the env file, under systemd). `--admin-token` also works, but a command line is visible to every local user through `ps`, so the unit never uses it. The env files are `0660 root:rcfgsim-ui`, so the device processes cannot read them either. Anyone who can reach the API can change faults and capacity, so keep `--metrics-addr` on loopback or set a token; the simulator logs a warning when the API is on a non-loopback address with no token.
+**Security.** The admin API has **no authentication**: anyone who can reach it can change faults and capacity. It is meant for the [web UI](#web-ui) on the same host, so keep `--metrics-addr` on loopback (`127.0.0.1:<port>`) whenever `--admin` is on; `make setup` does. The simulator logs a warning when the API is on any other address.
 
 All bodies are JSON. Errors are `4xx` with `{"error": "..."}`; unknown fields are rejected. Every successful `PUT` returns the full state, as `GET /admin/v1/state` does, with `generation` one higher.
 
@@ -1298,7 +1298,7 @@ The outcomes are those of `rcfgsim_sessions_total{result=...}`. A device with a 
 `kind` is `session_start`, `session_end` (with `outcome`, and the session's last `fault` if any) or `fault` (with the fault type). `t` is unix milliseconds, `bytes` the bytes sent in the session so far and `ms` the time since the session started. `sample` is the share of events kept, in `(0,1]`, default `0.01`. Each stream gets at most 200 events per second; events past that, or that a slow client cannot keep up with, are dropped and reported once a second as `{"kind":"dropped","n":123}`. With no stream open, events cost nothing.
 
 ```bash
-curl -sN -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:9100/admin/v1/events?sample=0.1'
+curl -sN 'http://127.0.0.1:9100/admin/v1/events?sample=0.1'
 ```
 
 ---
@@ -1310,49 +1310,88 @@ curl -sN -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:9100/admin/v1/event
 ### Install and run
 
 ```bash
-# 1. Each instance needs its admin API on. In every /etc/rcfg-sim/<IP>.env:
+# 1. Each instance needs its admin API on, on loopback (it has no auth).
+#    In every /etc/rcfg-sim/<IP>.env:
 #      ADMIN=true
-#      ADMIN_TOKEN=<token>     # optional, recommended
+#      METRICS_ADDR=127.0.0.1:9100     # a different port per instance
 #    then restart the instances.
 
 # 2. Install: the rcfgsim-ui user, binary, unit, polkit rule and env file.
 make build
 sudo make install-ui
 
-# 3. Set UI_TOKEN and ADMIN_TOKEN (the instances' token) in
-#    /etc/rcfg-sim-ui/rcfg-sim-ui.env, then start it.
+# 3. Set the login in /etc/rcfg-sim-ui/rcfg-sim-ui.env, then start it.
+/opt/rcfg-sim/bin/rcfg-sim-ui hash-password      # prompts twice, prints a bcrypt hash
+#      UI_USERNAME=admin
+#      UI_PASSWORD_HASH=<the hash>
 sudo systemctl enable --now rcfg-sim-ui
 
 # 4. It listens on 127.0.0.1:8080. From your workstation:
 ssh -L 8080:127.0.0.1:8080 <simulator-host>
-# then open http://127.0.0.1:8080/login?token=<UI_TOKEN> once.
+# then open http://127.0.0.1:8080/ and log in.
 ```
 
 `make install-ui` is not part of `make install`, and never enables or starts the unit.
 
 ### Screens
 
-- **Fleet**: one card per instance with its state (up; down, with the systemd unit state; admin API off; token rejected; metrics port clash), sessions against the cap, active devices, a bytes/s sparkline and the config generation. Start, stop and restart per instance or for the whole fleet, and a rolling restart that does one instance at a time and waits for each to answer `/healthz`. Fleet-wide active devices (split across up and down instances in proportion to their device counts, a down instance by its `PORT_COUNT`, its share saved to `ACTIVE_DEVICES` for its next start), response delay, and per-instance session caps.
+- **Fleet**: one card per instance with its state (up; down, with the systemd unit state; admin API off; metrics port clash), sessions against the cap, active devices, a bytes/s sparkline and the config generation. Start, stop and restart per instance or for the whole fleet, and a rolling restart that does one instance at a time and waits for each to answer `/healthz`. Fleet-wide active devices (split across up and down instances in proportion to their device counts, a down instance by its `PORT_COUNT`, its share saved to `ACTIVE_DEVICES` for its next start), response delay, and per-instance session caps.
 - **Failures**: a rate per fault type (slider and number, 0 to 10% by default, extendable to 100%, with a live estimate of events per full poll), device profile rules and seed, and a "who is affected" list of the hostnames the rules pick, the same ones `rcfg-sim` picks, with copy to clipboard. Presets: three built in (Flaky WAN, Auth storm, Slow core) and any you save, under `--data-dir/presets/`.
+- **Build**: regenerate the fleet with a new count, seed and distribution, with an estimate first, a streamed job log, and rollback (see [Builds](#builds)).
 - **Activity**: live observation while the page is open.
   - **Heatmap**: every device as one cell, coloured by state (never, ok, auth_fail, disconnect, error, hang, inactive, active, plus unreachable for an instance that is not reporting), with a count per state in the legend. Hover shows the hostname, state and last seen; click opens a panel with the device's address, profile and recent events. 50,000 devices fit as a 250 x 200 grid, refreshed every 2 seconds.
   - **Charts** (10-minute window): active sessions, sessions per second by outcome, bytes per second, and faults per second by type, worked out by the UI from each instance's `/metrics` counters on every poll. No Prometheus server is needed; an instance restart (counters back to zero) is handled. Nothing is kept beyond the window.
   - **Event tail**: sampled session events from every instance, filterable by hostname, outcome and fault, with a pause button. Each instance caps its stream at 200 events per second and the UI caps each browser at 200; drops at either are counted on the page.
 
-Nothing applies until you press **Apply**; the pending-changes bar shows what will change. A change goes to every instance that is up, and each instance's env file gets exactly the settings that instance accepted: if it takes the faults but refuses the profiles, only the faults are saved. A **down** instance's env file is written anyway and the result says "applies on next start", so a stopped instance does not come back on old settings. Instances with the admin API off, a rejected token, a bad env file or a metrics port clash are skipped and listed; nothing is written for them.
+Nothing applies until you press **Apply**; the pending-changes bar shows what will change. A change goes to every instance that is up, and each instance's env file gets exactly the settings that instance accepted: if it takes the faults but refuses the profiles, only the faults are saved. A **down** instance's env file is written anyway and the result says "applies on next start", so a stopped instance does not come back on old settings. Instances with the admin API off, a bad env file or a metrics port clash are skipped and listed; nothing is written for them.
 
 **Drift.** On every poll the UI compares each instance's live config with its env file. A difference, from a hand edit or a failed write, shows as a drift badge on the card. **Re-apply** pushes the env file's settings to the instance.
 
-The Activity page holds one connection per instance to its `/admin/v1/events` stream and polls `/admin/v1/devices`, only while at least one browser has the page open; with none open, it holds nothing. Build (regenerating configs) is not in this release.
+The Activity page holds one connection per instance to its `/admin/v1/events` stream and polls `/admin/v1/devices`, only while at least one browser has the page open; with none open, it holds nothing.
+
+### Builds
+
+The **Build** screen regenerates every device config with a new device count, seed and distribution (a weight per model, totalling 100), then restarts the fleet onto it one instance at a time. It shows a disk, RAM and time estimate first, and refuses before writing anything when:
+
+- the count would leave an instance with no devices (the generator fills IPs in order, and an empty instance will not start). To run fewer devices, use **Active devices** on the Fleet screen instead;
+- the count needs more IP aliases than there are instances. The screen shows the exact root-only steps (aliases, env files, enabling the units), then you build again;
+- the instances are not a layout the generator can reproduce (consecutive IPs, the same `PORT_START`, `PORT_COUNT` and `MANIFEST`);
+- free disk is below the estimate plus 10%.
+
+Each build lives in its own directory and a symlink says which is live, so nothing live is ever renamed or rewritten:
+
+```
+/opt/rcfg-sim/data/                      root:rcfgsim-ui 2775
+├── current -> builds/20261031-0915      swapped atomically
+└── builds/
+    ├── 20261031-0915/                   live build: configs/, manifest.csv, build.json
+    └── 20261030-1640/                   previous build, kept for rollback
+```
+
+The instances read `MANIFEST=/opt/rcfg-sim/data/current/manifest.csv`. A build generates into a new `builds/<timestamp>/` directory (a failed run deletes it and leaves `current` alone), swaps `current`, and does a rolling restart. If the restart stops on an instance, the screen offers **Roll back**, which points `current` at the previous build and restarts again. After a successful build only the live build and the one before it are kept. A build reuses the live build's login credentials and its other generator options (from `build.json`); job logs are kept in `--data-dir/jobs/`.
+
+**Adopting an existing install.** Installs set up before the UI keep `configs/` and `manifest.csv` directly under `/opt/rcfg-sim`, and stay that way until you choose to move them: the unit's and generator's defaults are unchanged. Until then the Build screen shows these steps instead of the form. Once, as root:
+
+```bash
+sudo make adopt-data            # or: sudo bash /opt/rcfg-sim/deploy/adopt-data.sh
+sudo make install-ui && sudo systemctl restart rcfg-sim-ui   # the UI unit may write /opt/rcfg-sim/data
+```
+
+`adopt-data` moves the existing configs and manifest into the first build (rewriting that one manifest's `config_file` paths), writes a `build.json` marked adopted, points `current` at it and sets `MANIFEST` in every env file. It refuses if the install is already adopted, if the instances do not share one manifest, or if the data directory is on another filesystem. The instances keep running; restart them (Fleet, Rolling restart) to read the new path. Options: `--data-dir`, `--manifest`, `--configs-dir`, `--env-dir`, `--group`, `--dry-run`.
+
+The UI never gets write access to the rest of `/opt/rcfg-sim`, so it cannot replace the simulator binaries.
 
 ### Security
 
-The UI has no user accounts. It is still a control plane that can stop the fleet, so:
+The UI is a control plane that can stop the fleet, so it has a basic login and a few guards:
 
-- It listens on `127.0.0.1:8080` by default. Use an SSH tunnel, or set `UI_ADDR` deliberately and set a token; it logs a warning on a non-loopback address with no token.
-- `UI_TOKEN`, when set, is needed once per browser: `/login?token=<token>` sets an `HttpOnly`, `SameSite=Strict` cookie. Scripts may send `Authorization: Bearer <token>`.
+- **Login.** One user. `/login` asks for the username and password; a session cookie (`HttpOnly`, `SameSite=Strict`, 12 hours, extended by use) keeps you in, and **Log out** in the header ends it. Every page, stream and action needs a session; only `/login`, `/static/*` and `/healthz` do not. Sessions live in memory, so restarting the UI logs everyone out.
+- **Credentials** come only from `/etc/rcfg-sim-ui/rcfg-sim-ui.env`: `UI_USERNAME` and `UI_PASSWORD_HASH`, a bcrypt hash, never the password. Make the hash with `rcfg-sim-ui hash-password` (it prompts twice without echo, or reads one line from a pipe). There are no flags for them, so they never appear on a command line. The UI **refuses to start** if either is missing or the hash is not valid bcrypt; there is no mode without a login.
+- **Changing the password**: put a new hash in the env file and `sudo systemctl restart rcfg-sim-ui`.
+- **Failed logins** are logged with the source address, and the message never says which value was wrong. After 5 failures from one address in 5 minutes, each further attempt from it waits 30 seconds.
+- It listens on `127.0.0.1:8080` by default. It is plain HTTP, so use an SSH tunnel, or set `UI_ADDR` deliberately on a private lab network; it logs "plain HTTP: use an SSH tunnel or a private network" on any non-loopback address.
+- **Host check**: requests whose `Host` header is not the listen address, `localhost` or `127.0.0.1` get 403, which stops DNS rebinding. Reach it by another name (a lab DNS name, or when listening on `0.0.0.0`) by adding that name with `--ui-allowed-hosts`.
 - State-changing requests must carry the `HX-Request` header htmx sends, which a cross-site form cannot.
-- Tokens are read from the environment (`UI_TOKEN`, `ADMIN_TOKEN`), never put on a command line.
 - It runs as its own user, `rcfgsim-ui`. The polkit rule (`/etc/polkit-1/rules.d/50-rcfg-sim-ui.rules`) lets it start, stop and restart `rcfg-sim@*.service` and nothing else. It never runs as root and never touches IP aliases.
 - The page loads nothing from outside the host: fonts, scripts and styles are embedded, and a strict Content-Security-Policy enforces it. It works on air-gapped networks.
 
@@ -1372,18 +1411,19 @@ NoNewPrivileges=false
 ### Flags
 
 ```
---ui-addr string      Listen address for the UI (default "127.0.0.1:8080")
---ui-token string     UI token; unset falls back to the UI_TOKEN env var (default "" = no token)
---env-dir string      Instance env files; each *.env is one instance (default "/etc/rcfg-sim")
---admin-token string  Token sent to instance admin APIs; unset falls back to ADMIN_TOKEN (default "")
---gen-bin string      Generator binary for build jobs (default "/opt/rcfg-sim/bin/rcfg-sim-gen"; not used yet)
---data-dir string     Presets and job logs (default "/var/lib/rcfg-sim-ui")
---poll duration       Instance poll interval (default 2s)
---systemctl string    Unit control command (default "systemctl"; e.g. "sudo -n systemctl")
---log-level string    error|warn|info|debug (default "info")
+--ui-addr string           Listen address for the UI (default "127.0.0.1:8080")
+--ui-allowed-hosts string  Extra Host header names accepted, comma-separated (default "")
+--env-dir string           Instance env files; each *.env is one instance (default "/etc/rcfg-sim")
+--gen-bin string           Generator binary for build jobs (default "/opt/rcfg-sim/bin/rcfg-sim-gen")
+--data-dir string          Presets and job logs (default "/var/lib/rcfg-sim-ui")
+--poll duration            Instance poll interval (default 2s)
+--systemctl string         Unit control command (default "systemctl"; e.g. "sudo -n systemctl")
+--log-level string         error|warn|info|debug (default "info")
+
+rcfg-sim-ui hash-password  Read a password (prompted, or one line on stdin) and print its bcrypt hash
 ```
 
-Under systemd these come from `UI_ADDR`, `ENV_DIR`, `GEN_BIN`, `DATA_DIR`, `POLL`, `SYSTEMCTL` and `LOG_LEVEL` in `/etc/rcfg-sim-ui/rcfg-sim-ui.env`; see `deploy/systemd/rcfg-sim-ui.env.sample`.
+Under systemd these come from `UI_ADDR`, `ENV_DIR`, `GEN_BIN`, `DATA_DIR`, `POLL`, `SYSTEMCTL` and `LOG_LEVEL` in `/etc/rcfg-sim-ui/rcfg-sim-ui.env`, alongside the login (`UI_USERNAME`, `UI_PASSWORD_HASH`); see `deploy/systemd/rcfg-sim-ui.env.sample`.
 
 ### Building the UI
 
@@ -1777,7 +1817,6 @@ SSH server. One instance per IP alias.
 --active-devices string        Devices accepting sessions, in port order: all or 0..port-count; the rest refuse (default "all")
 --commands-root string         Per-device command output files, DIR/<hostname>/<slug>.txt (default "" = off)
 --admin                        Serve the admin API (/admin/v1/*) on --metrics-addr (default false)
---admin-token string           If set, admin API requests must send Authorization: Bearer <token>; unset falls back to the ADMIN_TOKEN env var, the preferred way (default "" = no token)
 --log-level string             error|warn|info|debug (default "info")
 ```
 

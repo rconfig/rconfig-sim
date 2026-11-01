@@ -26,7 +26,6 @@ const (
 	StatusPortClash Status = "port-clash" // shares a metrics port with another instance
 	StatusDown      Status = "down"       // /healthz does not answer
 	StatusAdminOff  Status = "admin-off"  // /healthz answers, /admin/v1/state is 404
-	StatusAuth      Status = "auth"       // admin API rejects the controller's token
 	StatusError     Status = "error"      // admin API answered something unexpected
 	StatusUp        Status = "up"
 )
@@ -56,11 +55,10 @@ type UnitStater interface {
 
 // Options configure a Fleet.
 type Options struct {
-	EnvDir     string
-	AdminToken string
-	Units      UnitStater // may be nil
-	Client     *http.Client
-	Logger     *slog.Logger
+	EnvDir string
+	Units  UnitStater // may be nil
+	Client *http.Client
+	Logger *slog.Logger
 	// ApplyTimeout bounds each instance's part of a fan-out. Zero means 5s.
 	ApplyTimeout time.Duration
 }
@@ -190,8 +188,6 @@ func (f *Fleet) poll(ctx context.Context, in Instance) View {
 		v.Status, v.Detail = StatusError, err.Error()
 	case code == http.StatusNotFound:
 		v.Status, v.Detail = StatusAdminOff, "admin API is off: add ADMIN=true to "+in.EnvPath+" and restart"
-	case code == http.StatusUnauthorized:
-		v.Status, v.Detail = StatusAuth, "admin API rejected the token: set the same ADMIN_TOKEN for rcfg-sim-ui and the instance"
 	case code != http.StatusOK:
 		v.Status, v.Detail = StatusError, fmt.Sprintf("admin API answered %d", code)
 	default:
@@ -242,9 +238,6 @@ func (f *Fleet) adminRequest(ctx context.Context, method, addr, path string, bod
 	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+admin.Prefix+path, rd)
 	if err != nil {
 		return nil, err
-	}
-	if f.opt.AdminToken != "" {
-		req.Header.Set("Authorization", "Bearer "+f.opt.AdminToken)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

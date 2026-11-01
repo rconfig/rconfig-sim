@@ -30,7 +30,13 @@ templ Layout(p Page) {
 						<img class="logo-light h-8 w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
 					</a>
 					@HealthPill(p.Up, p.Total, false)
-					<div class="ml-auto flex items-center gap-1 rounded-card border border-line p-0.5" role="group" aria-label="Theme">
+					<div class="ml-auto flex items-center gap-3">
+						if p.User != "" {
+							<span class="text-xs text-muted">{ p.User }</span>
+							<button type="button" hx-post="/logout" class="rounded-md border border-line px-2.5 py-1 text-xs hover:bg-tint">Log out</button>
+						}
+					</div>
+					<div class="flex items-center gap-1 rounded-card border border-line p-0.5" role="group" aria-label="Theme">
 						for _, t := range []string{"dark", "light", "auto"} {
 							<button type="button" data-theme-set={ t } aria-pressed="false" class="rounded-md px-2.5 py-1 text-xs capitalize text-muted hover:text-fg aria-pressed:bg-tint aria-pressed:text-fg">{ t }</button>
 						}
@@ -43,7 +49,7 @@ templ Layout(p Page) {
 						@navItem("/fleet", "Fleet", p.Nav == "fleet", true)
 						@navItem("/failures", "Failures", p.Nav == "failures", true)
 						@navItem("/activity", "Activity", p.Nav == "activity", true)
-						@navItem("", "Build", false, false)
+						@navItem("/build", "Build", p.Nav == "build", true)
 					</ul>
 				</nav>
 				<main class="min-w-0 flex-1 p-6">
@@ -127,21 +133,47 @@ templ ClearPending() {
 	<div id="pending" hx-swap-oob="innerHTML"></div>
 }
 
-// Unauthorized is shown when a UI token is set and the request has none.
-templ Unauthorized() {
+// LoginPage is the login form (section 8): the logo and one card with two
+// fields. htmx posts it; on success the server answers HX-Redirect.
+templ LoginPage() {
 	<!DOCTYPE html>
 	<html lang="en" data-theme="dark">
 		<head>
 			<meta charset="utf-8"/>
-			<title>Sign in · Sim by rConfig</title>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0}'/>
+			<title>Log in · Sim by rConfig</title>
+			<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml"/>
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script src="/static/theme.js"></script>
+			<script src="/static/vendor/htmx-2.0.11.min.js" defer></script>
 		</head>
-		<body class="grid min-h-screen place-items-center p-6">
-			<div class="brand-hairline max-w-md rounded-card border border-line bg-panel p-6">
-				<h1 class="text-xl">Token required</h1>
-				<p class="mt-2 text-muted">This rcfg-sim-ui needs its token. Open <code class="num">/login?token=&lt;token&gt;</code> once in this browser; a cookie keeps you signed in.</p>
-			</div>
+		<body class="grid min-h-screen place-items-center p-6 text-sm">
+			<main class="w-full max-w-sm">
+				<div class="mb-6 flex justify-center">
+					<img class="logo-dark h-10 w-auto" src="/static/img/sim-logo-white.svg" alt="Sim by rConfig"/>
+					<img class="logo-light h-10 w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
+				</div>
+				<form hx-post="/login" hx-target="#login-error" hx-swap="innerHTML" class="brand-hairline flex flex-col gap-4 rounded-card border border-line bg-panel p-6">
+					<h1 class="text-xl">Log in</h1>
+					<label class="flex flex-col gap-1">
+						<span>Username</span>
+						<input name="username" type="text" autocomplete="username" required autofocus class="rounded-md border border-line bg-bg px-3 py-2"/>
+					</label>
+					<label class="flex flex-col gap-1">
+						<span>Password</span>
+						<input name="password" type="password" autocomplete="current-password" required class="rounded-md border border-line bg-bg px-3 py-2"/>
+					</label>
+					<div id="login-error" aria-live="polite"></div>
+					<button type="submit" class="rounded-md bg-accent-600 px-4 py-2 font-medium text-white hover:bg-accent-700">Log in</button>
+				</form>
+			</main>
 		</body>
 	</html>
+}
+
+// LoginError is a failed login's message. It never says which value was
+// wrong.
+templ LoginError(msg string) {
+	<p class="rounded-md border border-st-error px-3 py-2 text-st-error" role="alert">{ msg }</p>
 }

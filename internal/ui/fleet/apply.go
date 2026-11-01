@@ -33,7 +33,7 @@ type Result struct {
 	// change applies when it next starts.
 	NextStart bool
 	// Skipped: the instance was not in a state to take the change (admin API
-	// off, token rejected, bad env file, port clash, error). Nothing written.
+	// off, bad env file, port clash, error). Nothing written.
 	Skipped bool
 }
 

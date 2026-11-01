@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
@@ -76,6 +77,20 @@ func TestLoopback(t *testing.T) {
 	} {
 		if got := loopback(addr); got != want {
 			t.Errorf("%s: want %v, got %v", addr, want, got)
+		}
+	}
+}
+
+func TestCheckRemovedFlags(t *testing.T) {
+	for _, args := range [][]string{{"--admin-token=x"}, {"-admin-token", "x"}, {"--admin", "--admin-token", "y"}} {
+		err := checkRemovedFlags(args)
+		if err == nil || !strings.Contains(err.Error(), "--admin-token was removed") {
+			t.Errorf("%v: want a removed-flag error, got %v", args, err)
+		}
+	}
+	for _, args := range [][]string{nil, {"--admin"}, {"--metrics-addr", "127.0.0.1:9100"}, {"--", "--admin-token"}} {
+		if err := checkRemovedFlags(args); err != nil {
+			t.Errorf("%v: %v", args, err)
 		}
 	}
 }

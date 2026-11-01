@@ -1,0 +1,193 @@
+package views
+
+// BuildPage is the Build screen (10.4): regenerate the fleet's configs with
+// a new count, seed and distribution, then restart onto them.
+templ BuildPage(p Page, m BuildModel) {
+	@Layout(p) {
+		<div class="flex items-baseline justify-between gap-4">
+			<h1 class="text-2xl">Build</h1>
+			<p class="text-muted">Regenerates every device config, then restarts the fleet one instance at a time.</p>
+		</div>
+		if m.NotAdopted != "" {
+			@adoptionSteps(m)
+		} else if m.Err != "" {
+			<p class="mt-6 rounded-card border border-st-error bg-panel px-4 py-3">{ m.Err }</p>
+		} else {
+			<div class="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+				<div class="flex flex-col gap-6">
+					@liveBuild(m)
+					@buildForm(m)
+				</div>
+				<div class="flex flex-col gap-6">
+					@panel("Estimate", "What the build needs, worked out before anything is written.") {
+						<div id="build-estimate" hx-post="/build/estimate" hx-trigger="load, input changed delay:300ms from:#build-form" hx-include="#build-form" hx-swap="innerHTML">
+							<p class="text-muted">Working out the estimate…</p>
+						</div>
+					}
+				</div>
+			</div>
+			<div id="build-job" class="mt-6">
+				if m.Job != nil {
+					@JobPanel(*m.Job)
+				}
+			</div>
+		}
+	}
+}
+
+templ adoptionSteps(m BuildModel) {
+	@panel("Adopt this install first", "Builds need the data/ layout: each build in its own directory under "+m.DataDir+"/builds/, and a current symlink the instances read. This install is not on it yet.") {
+		<p class="text-muted">Reason: { m.NotAdopted }</p>
+		<p class="mt-3">On the simulator host, as root, once:</p>
+		<pre class="num mt-2 overflow-auto rounded-md border border-line bg-bg p-3 text-xs">
+			{ "# from the rconfig-sim source checkout\nsudo make adopt-data\n# or, from an installed copy\nsudo bash /opt/rcfg-sim/deploy/adopt-data.sh\n\n# the UI needs write access to the data directory\nsudo make install-ui && sudo systemctl restart rcfg-sim-ui\n" }
+		</pre>
+		<p class="mt-3 text-muted">It moves the current configs and manifest into the first build, points every instance's MANIFEST at { m.DataDir }/current/manifest.csv and leaves the instances running. Then restart them (Fleet, Rolling restart) and reload this page.</p>
+	}
+}
+
+templ liveBuild(m BuildModel) {
+	@panel("Live build", "") {
+		if m.Live != nil {
+			<dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1">
+				<dt class="text-muted">Build</dt><dd class="num">{ m.Live.Name }</dd>
+				<dt class="text-muted">Created</dt><dd class="num">{ m.Live.Created }</dd>
+				<dt class="text-muted">Devices</dt><dd class="num">{ itoa(m.Live.Count) }</dd>
+				<dt class="text-muted">Seed</dt><dd class="num">{ m.Live.Seed }</dd>
+				<dt class="text-muted">Distribution</dt><dd class="num break-all">{ m.Live.Distribution }</dd>
+			</dl>
+			if m.Live.Adopted {
+				<p class="mt-2 text-xs text-muted">Adopted from a pre-UI install: its seed and distribution are not known, so the form starts from the generator's defaults.</p>
+			}
+		}
+		<div class="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
+			if m.Previous != nil {
+				<span class="text-muted">Previous build <span class="num text-fg">{ m.Previous.Name }</span> ({ itoa(m.Previous.Count) } devices)</span>
+				<button type="button" hx-post="/build/rollback" hx-target="#build-job" hx-confirm={ "Roll back to build " + m.Previous.Name + " and restart every instance?" } class="rounded-md border border-line px-3 py-1.5 hover:bg-tint">Roll back</button>
+			} else {
+				<span class="text-muted">No previous build to roll back to.</span>
+			}
+		</div>
+	}
+}
+
+templ buildForm(m BuildModel) {
+	@panel("New build", "") {
+		<form id="build-form" hx-post="/build/run" hx-target="#build-job" hx-confirm="Generate a new build and restart every instance onto it?" class="flex flex-col gap-5">
+			<div class="grid gap-3 sm:grid-cols-2">
+				<label class="flex flex-col gap-1">
+					<span>Devices</span>
+					<input name="count" type="number" min={ itoa(m.MinCount) } max={ itoa(m.MaxCount) } step="1" value={ itoa(m.Count) } class="num rounded-md border border-line bg-bg px-2 py-1"/>
+					<span class="text-xs text-muted">{ itoa(m.MinCount) } to { itoa(m.MaxCount) } on { itoa(m.Instances) } instances of { itoa(m.PerIP) }. Every instance needs at least one device; to run fewer, use Active devices on the Fleet screen.</span>
+				</label>
+				<label class="flex flex-col gap-1">
+					<span>Seed</span>
+					<input name="seed" type="number" step="1" value={ i64(m.Seed) } class="num rounded-md border border-line bg-bg px-2 py-1"/>
+					<span class="text-xs text-muted">Same seed and distribution, same configs.</span>
+				</label>
+			</div>
+			<fieldset class="flex flex-col gap-2">
+				<legend class="mb-2">Distribution (percent of devices per model, must total 100)</legend>
+				for _, w := range m.Weights {
+					<div class="grid items-center gap-3 sm:grid-cols-[11rem_minmax(0,1fr)_6rem]">
+						<label for={ "w-" + w.Model } class="num">{ w.Model }</label>
+						<input type="range" min="0" max="100" step="1" value={ itoa(w.Pct) } data-sync={ "w-" + w.Model } aria-label={ w.Model + " percent" }/>
+						<div class="flex items-center gap-1">
+							<input id={ "w-" + w.Model } name={ "w_" + w.Model } type="number" min="0" max="100" step="1" value={ itoa(w.Pct) } class="num w-16 rounded-md border border-line bg-bg px-2 py-1"/>
+							<span class="text-muted">%</span>
+						</div>
+					</div>
+				}
+			</fieldset>
+			<div><button type="submit" class="rounded-md bg-accent-600 px-4 py-2 font-medium text-white hover:bg-accent-700">Build and restart</button></div>
+		</form>
+	}
+}
+
+// EstimatePanel is the estimate for the form's current values.
+templ EstimatePanel(m EstimateModel) {
+	<div class="flex flex-col gap-3">
+		<div>
+			<div class="flex justify-between text-xs text-muted">
+				<span>Distribution</span>
+				<span class={ "num", templ.KV("text-st-error", m.Total != 100) }>{ itoa(m.Total) }% of 100%</span>
+			</div>
+			<svg class="mt-1 h-4 w-full rounded-sm" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="Distribution by model">
+				<rect width="100" height="4" class="fill-panel-2"></rect>
+				for _, b := range m.Bars {
+					<rect x={ b.X } width={ b.W } height="4" class={ b.Class }><title>{ b.Model } { itoa(b.Pct) }%</title></rect>
+				}
+			</svg>
+			<ul class="mt-1 flex flex-wrap gap-x-3 text-xs">
+				for _, b := range m.Bars {
+					<li class="flex items-center gap-1"><svg class="size-2.5" viewBox="0 0 1 1" aria-hidden="true"><rect width="1" height="1" class={ b.Class }></rect></svg><span class="num">{ b.Model } { itoa(b.Pct) }%</span></li>
+				}
+			</ul>
+		</div>
+		if m.Disk != "" {
+			<dl class="grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1">
+				<dt class="text-muted">Disk</dt><dd class="num">{ m.Disk }</dd>
+				<dt class="text-muted">Free</dt><dd class={ "num", templ.KV("text-st-error", !m.Fits) }>{ m.Free }</dd>
+				<dt class="text-muted">RAM (page cache)</dt><dd class="num">{ m.RAM }</dd>
+				<dt class="text-muted">Generate</dt><dd class="num">{ m.Generate }</dd>
+				<dt class="text-muted">Restart</dt><dd class="num">{ m.Restart }</dd>
+			</dl>
+		}
+		if m.Unknowns {
+			<p class="text-xs text-muted">The live build's settings are unknown (adopted), so other generator options use their defaults.</p>
+		}
+		if m.Err != "" {
+			<p class="rounded-md border border-st-error px-3 py-2 text-st-error" role="alert">{ m.Err }</p>
+		}
+		if len(m.Steps) > 0 {
+			<div>
+				<p class="text-muted">Steps, as root, before building:</p>
+				<pre class="num mt-1 overflow-auto rounded-md border border-line bg-bg p-3 text-xs">
+					for _, s := range m.Steps {
+						{ s + "\n" }
+					}
+				</pre>
+			</div>
+		}
+		if m.Ready {
+			<p class="text-st-ok">Ready to build.</p>
+		}
+	</div>
+}
+
+// JobPanel streams a build or rollback's log until it finishes.
+templ JobPanel(m JobModel) {
+	<section class="rounded-card border border-line bg-panel p-5" aria-label="Job">
+		<div class="flex items-baseline justify-between gap-3">
+			<h2 class="text-lg capitalize">{ m.Kind } <span class="num text-sm text-muted">{ m.ID }</span></h2>
+		</div>
+		if m.Finished {
+			@JobState(m)
+			<pre class="num mt-3 max-h-[28rem] overflow-auto rounded-md border border-line bg-bg p-3 text-xs">
+				for _, l := range m.Lines {
+					{ l + "\n" }
+				}
+			</pre>
+		} else {
+			<div hx-ext="sse" sse-connect={ "/build/jobs/" + m.ID + "/stream" } sse-close="done">
+				<div sse-swap="state" hx-swap="innerHTML">
+					<p class="mt-2 text-st-active">Running…</p>
+				</div>
+				<pre sse-swap="line" hx-swap="beforeend" class="num mt-3 max-h-[28rem] overflow-auto rounded-md border border-line bg-bg p-3 text-xs"></pre>
+			</div>
+		}
+	</section>
+}
+
+// JobState is a finished job's outcome, with rollback offered when a
+// failed build left the fleet on the new build.
+templ JobState(m JobModel) {
+	if m.Err == "" {
+		<p class="mt-2 text-st-ok">Finished.</p>
+	} else {
+		<p class="mt-2 text-st-error" role="alert">{ m.Err }</p>
+		if m.OfferRollback {
+			<button type="button" hx-post="/build/rollback" hx-target="#build-job" hx-confirm="Roll back to the previous build and restart every instance?" class="mt-2 rounded-md bg-accent-600 px-3 py-1.5 font-medium text-white hover:bg-accent-700">Roll back</button>
+		}
+	}
+}

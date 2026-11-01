@@ -46,8 +46,7 @@ Environment=ADMIN=false
 # Per-instance config: /etc/rcfg-sim/10.50.0.1.env supplies LISTEN_IP,
 # PORT_START, etc. See /opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample.
 # systemd reads it as root before the service starts, so rcfg-sim itself needs
-# no access to /etc/rcfg-sim. ADMIN_TOKEN reaches rcfg-sim only as an
-# environment variable from this file, never on the command line (visible in ps).
+# no access to /etc/rcfg-sim.
 EnvironmentFile=/etc/rcfg-sim/%i.env
 
 ExecStart=/opt/rcfg-sim/bin/rcfg-sim \

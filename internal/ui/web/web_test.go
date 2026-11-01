@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/envfile"
@@ -56,10 +59,37 @@ type env struct {
 	srv     *Server
 	http    *httptest.Server
 	presets string
+	auth    *Auth
+	session string // a logged-in session, sent by default
+}
+
+// testPassword is the test user's password; testAuth hashes it at the
+// lowest bcrypt cost to keep tests fast.
+const testPassword = "correct horse"
+
+func testAuth(t *testing.T) *Auth {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewAuth(AuthOptions{Username: "admin", PasswordHash: string(h), FailDelay: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// client is an HTTP client carrying the env's session cookie.
+func (e *env) client() *http.Client {
+	jar, _ := cookiejar.New(nil)
+	u, _ := url.Parse(e.http.URL)
+	jar.SetCookies(u, []*http.Cookie{{Name: SessionCookie, Value: e.session}})
+	return &http.Client{Jar: jar}
 }
 
 // newEnv starts n fake instances and a UI over them.
-func newEnv(t *testing.T, n int, token string) *env {
+func newEnv(t *testing.T, n int) *env {
 	t.Helper()
 	e := &env{t: t, dir: t.TempDir(), sysctl: &fakeSystemctl{}}
 	for i := 1; i <= n; i++ {
@@ -70,7 +100,9 @@ func newEnv(t *testing.T, n int, token string) *env {
 	e.fleet = fleet.New(fleet.Options{EnvDir: e.dir, Units: units})
 	e.fleet.Poll(context.Background())
 	e.presets = filepath.Join(t.TempDir(), "presets")
-	e.srv = New(Options{Fleet: e.fleet, Units: units, Presets: presets.NewStore(e.presets), Token: token,
+	e.auth = testAuth(t)
+	e.session = e.auth.NewSession()
+	e.srv = New(Options{Fleet: e.fleet, Units: units, Presets: presets.NewStore(e.presets), Auth: e.auth,
 		Poll: time.Second, RollingWait: 3 * time.Second, FrameEvery: 100 * time.Millisecond})
 	e.http = httptest.NewServer(e.srv)
 	// The UI server first: it ends open Activity streams, which the HTTP
@@ -83,8 +115,9 @@ type req struct {
 	method, path string
 	form         url.Values
 	htmx         bool
-	cookie       string
-	bearer       string
+	anon         bool              // send no session
+	session      string            // send this session instead of the env's
+	header       map[string]string // extra headers
 }
 
 func (e *env) do(r req) (*http.Response, string) {
@@ -100,11 +133,19 @@ func (e *env) do(r req) (*http.Response, string) {
 	if r.htmx {
 		hr.Header.Set("HX-Request", "true")
 	}
-	if r.cookie != "" {
-		hr.AddCookie(&http.Cookie{Name: CookieName, Value: r.cookie})
+	if !r.anon {
+		id := e.session
+		if r.session != "" {
+			id = r.session
+		}
+		hr.AddCookie(&http.Cookie{Name: SessionCookie, Value: id})
 	}
-	if r.bearer != "" {
-		hr.Header.Set("Authorization", "Bearer "+r.bearer)
+	for k, v := range r.header {
+		if k == "Host" {
+			hr.Host = v
+			continue
+		}
+		hr.Header.Set(k, v)
 	}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(hr)
@@ -148,43 +189,8 @@ func failuresForm(pcts map[string]string, seed string, rules ...[3]string) url.V
 	return f
 }
 
-func TestTokenAndLogin(t *testing.T) {
-	e := newEnv(t, 1, "s3cret")
-	if resp, body := e.do(req{method: "GET", path: "/fleet"}); resp.StatusCode != 401 || !strings.Contains(body, "/login?token=") {
-		t.Fatalf("no token: %d", resp.StatusCode)
-	}
-	if resp, _ := e.do(req{method: "GET", path: "/static/app.css"}); resp.StatusCode != 200 {
-		t.Fatalf("static must be public: %d", resp.StatusCode)
-	}
-	if resp, _ := e.do(req{method: "GET", path: "/login?token=wrong"}); resp.StatusCode != 401 {
-		t.Fatalf("wrong token: %d", resp.StatusCode)
-	}
-	resp, _ := e.do(req{method: "GET", path: "/login?token=s3cret"})
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("login: %d", resp.StatusCode)
-	}
-	var c *http.Cookie
-	for _, ck := range resp.Cookies() {
-		if ck.Name == CookieName {
-			c = ck
-		}
-	}
-	if c == nil || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Value != "s3cret" {
-		t.Fatalf("cookie: %+v", c)
-	}
-	if resp, _ := e.do(req{method: "GET", path: "/fleet", cookie: "s3cret"}); resp.StatusCode != 200 {
-		t.Fatalf("with cookie: %d", resp.StatusCode)
-	}
-	if resp, _ := e.do(req{method: "GET", path: "/fleet", bearer: "s3cret"}); resp.StatusCode != 200 {
-		t.Fatalf("with bearer: %d", resp.StatusCode)
-	}
-	if resp, _ := e.do(req{method: "GET", path: "/fleet", cookie: "nope"}); resp.StatusCode != 401 {
-		t.Fatalf("wrong cookie: %d", resp.StatusCode)
-	}
-}
-
 func TestCSRFRequiresHXRequest(t *testing.T) {
-	e := newEnv(t, 1, "")
+	e := newEnv(t, 1)
 	resp, _ := e.do(req{method: "POST", path: "/fleet/delay", form: url.Values{"delay_min": {"0"}, "delay_max": {"1"}}})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("POST without HX-Request: %d", resp.StatusCode)
@@ -196,7 +202,7 @@ func TestCSRFRequiresHXRequest(t *testing.T) {
 
 // TestPagesAreSelfContained: strict CSP, and no asset or link off this host.
 func TestPagesAreSelfContained(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	for _, p := range []string{"/fleet", "/failures", "/activity"} {
 		resp, body := e.do(req{method: "GET", path: p})
 		if resp.StatusCode != 200 {
@@ -229,7 +235,7 @@ func TestPagesAreSelfContained(t *testing.T) {
 }
 
 func TestFleetPageAndCards(t *testing.T) {
-	e := newEnv(t, 3, "")
+	e := newEnv(t, 3)
 	e.insts[1].Down.Store(true)
 	e.insts[2].AdminOff.Store(true)
 	e.fleet.Poll(context.Background())
@@ -248,7 +254,7 @@ func TestFleetPageAndCards(t *testing.T) {
 }
 
 func TestFailuresApplyFansOutAndPersists(t *testing.T) {
-	e := newEnv(t, 3, "")
+	e := newEnv(t, 3)
 	form := failuresForm(map[string]string{"auth_fail": "2", "disconnect_mid": "0.5"}, "7", [3]string{"hang", "3600s", "3"}, [3]string{"refuse", "", "1.5"})
 	body := e.post("/failures/apply", form)
 	if !strings.Contains(body, "applied to 3 of 3 instances") || !strings.Contains(body, `id="pending" hx-swap-oob`) {
@@ -282,7 +288,7 @@ func TestFailuresApplyFansOutAndPersists(t *testing.T) {
 }
 
 func TestPendingFailures(t *testing.T) {
-	e := newEnv(t, 1, "")
+	e := newEnv(t, 1)
 	if body := e.post("/pending/failures", failuresForm(nil, "42")); strings.Contains(body, "Pending changes") {
 		t.Fatalf("unchanged form must show no pending bar: %s", body)
 	}
@@ -298,7 +304,7 @@ func TestPendingFailures(t *testing.T) {
 }
 
 func TestUnitActions(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	body := e.post("/fleet/instances/127.0.0.1/stop", url.Values{})
 	if !strings.Contains(body, "127.0.0.1: stop done") {
 		t.Fatalf("flash: %s", body)
@@ -323,7 +329,7 @@ func TestUnitActions(t *testing.T) {
 }
 
 func TestRollingRestart(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	body := e.post("/fleet/rolling-restart", url.Values{"pause": {"0"}})
 	if !strings.Contains(body, "Rolling restart of 2 instances started") {
 		t.Fatalf("start: %s", body)
@@ -357,7 +363,7 @@ func TestRollingRestart(t *testing.T) {
 }
 
 func TestFleetControls(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	if body := e.post("/fleet/delay", url.Values{"delay_min": {"5"}, "delay_max": {"15"}}); !strings.Contains(body, "applied to 2 of 2") {
 		t.Fatalf("delay: %s", body)
 	}
@@ -392,7 +398,7 @@ func TestFleetControls(t *testing.T) {
 }
 
 func TestDriftShownAndReapplied(t *testing.T) {
-	e := newEnv(t, 1, "")
+	e := newEnv(t, 1)
 	in := e.insts[0]
 	b, _ := os.ReadFile(in.EnvPath)
 	_ = os.WriteFile(in.EnvPath, append(b, []byte("FAULT_RATES=auth_fail=0.5\n")...), 0o660)
@@ -413,7 +419,7 @@ func TestDriftShownAndReapplied(t *testing.T) {
 }
 
 func TestAffectedPanel(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	body := e.post("/failures/affected", failuresForm(nil, "42", [3]string{"refuse", "", "50"}))
 	if !strings.Contains(body, "devices affected") || !strings.Contains(body, `data-copy="affected-list"`) || !strings.Contains(body, "rtr-127.0.0.") {
 		t.Fatalf("affected: %s", body)
@@ -424,7 +430,7 @@ func TestAffectedPanel(t *testing.T) {
 }
 
 func TestPresets(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	page := e.get("/failures")
 	for _, name := range []string{"Flaky WAN", "Auth storm", "Slow core"} {
 		if !strings.Contains(page, name) {
@@ -516,7 +522,7 @@ func TestComponentRender(t *testing.T) {
 // TestApplyToDownInstanceSavesForNextStart (section 5.4): a down instance's
 // env file is written and the result says it applies on next start.
 func TestApplyToDownInstanceSavesForNextStart(t *testing.T) {
-	e := newEnv(t, 2, "")
+	e := newEnv(t, 2)
 	e.insts[1].Down.Store(true)
 	e.fleet.Poll(context.Background())
 	body := e.post("/failures/apply", failuresForm(map[string]string{"auth_fail": "3"}, "42"))

@@ -26,9 +26,6 @@ func (f *Fleet) OpenEvents(ctx context.Context, name string, sample float64) (*h
 	if err != nil {
 		return nil, err
 	}
-	if f.opt.AdminToken != "" {
-		req.Header.Set("Authorization", "Bearer "+f.opt.AdminToken)
-	}
 	resp, err := f.stream.Do(req)
 	if err != nil {
 		return nil, err

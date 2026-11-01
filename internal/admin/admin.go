@@ -8,7 +8,6 @@
 package admin
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,9 +59,7 @@ type Options struct {
 	PortStart int
 	PortCount int
 	Devices   int // devices loaded from the manifest
-	// Token, when set, must be sent as "Authorization: Bearer <token>".
-	Token  string
-	Logger *slog.Logger
+	Logger    *slog.Logger
 	// DroppedEvery is how often an event stream reports dropped events.
 	// Zero means one second.
 	DroppedEvery time.Duration
@@ -134,18 +131,10 @@ func Handler(inst Instance, opt Options) http.Handler {
 	return h
 }
 
+// ServeHTTP serves the API. There is no authentication (D9): the API is
+// meant for the UI on the same host, on a loopback metrics address.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.opt.Token != "" && !h.authorized(r) {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="rcfg-sim"`)
-		writeError(w, http.StatusUnauthorized, "missing or wrong bearer token")
-		return
-	}
 	h.mux.ServeHTTP(w, r)
-}
-
-func (h *handler) authorized(r *http.Request) bool {
-	got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && subtle.ConstantTimeCompare([]byte(got), []byte(h.opt.Token)) == 1
 }
 
 // method wraps fn so any other HTTP method gets a JSON 405.
