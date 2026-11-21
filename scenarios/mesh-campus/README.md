@@ -21,12 +21,16 @@ Chassis IDs match a MAC in each device's `show interfaces`, so Mesh should resol
 
 ## Run
 
-The manifest `ip` column holds the address rConfig reaches the sim on (checked in as `10.1.1.2`), and `config_file` paths are absolute. Adjust both for your host, then:
+The manifest `ip` column holds the address rConfig reaches the sim on (checked in as `10.1.1.2`); adjust it for your host. The `config_file` paths are relative to the manifest, so the folder can live anywhere. Then:
 
 ```
 rcfg-sim --manifest scenarios/mesh-campus/manifest.csv --listen-ip <SIM_IP> --port-start 12700 --port-count 3 --commands-root scenarios/mesh-campus/commands
 ```
 
 For the full walkthrough (starting the sim, adding the devices to rConfig, collecting, expected links, pitfalls and troubleshooting), see the [playbook](PLAYBOOK.md).
+
+## Run from the web UI
+
+This folder is also a scenario package: `scenario.json` describes it for `rcfg-sim-ui`, which ships it built in. Start the shipped testbench *Topology: mesh campus*, or open it on the Scenarios screen (topology diagram, devices) and create your own testbench from it. The UI installs it as a build, moves the three devices onto the first instance (ports from its `PORT_START`, hostnames kept), turns on the command files, accepts any password, and stops the instances it does not need. See [Scenario packages](../../README.md#scenario-packages).
 
 The `TestMeshCampus_CommandFiles` integration test serves this scenario on loopback and checks every command file byte for byte.

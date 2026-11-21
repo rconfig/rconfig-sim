@@ -1,0 +1,25 @@
+{
+  "name": "Topology: mesh campus",
+  "description": "The mesh-campus scenario: three switches with matching LLDP and CDP neighbours across EOS, Junos and IOS, any password accepted.",
+  "version": 1,
+  "devices": {
+    "source": "scenario",
+    "scenario": {
+      "id": "mesh-campus",
+      "version": 1
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 300
+    },
+    "max_sessions": 100,
+    "active_devices": "all"
+  }
+}

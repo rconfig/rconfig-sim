@@ -1,0 +1,34 @@
+{
+  "name": "Scenario 5: full fleet, steady state",
+  "description": "50,000 Cisco IOS devices, no faults: the steady-state baseline (TEST-SCENARIOS.md scenario 5).",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 5,
+      "families": {
+        "ip": {
+          "models": {
+            "sm": 20000,
+            "md": 20000,
+            "lg": 7500,
+            "xl": 2500
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 5000,
+    "active_devices": "all"
+  }
+}

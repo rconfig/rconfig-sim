@@ -22,7 +22,7 @@ func (f *Fleet) OpenEvents(ctx context.Context, name string, sample float64) (*h
 		return nil, fmt.Errorf("no instance %q", name)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"http://"+v.DialAddr+admin.Prefix+"events?sample="+strconv.FormatFloat(sample, 'g', -1, 64), nil)
+		"http://"+v.AdminAddr+admin.Prefix+"events?sample="+strconv.FormatFloat(sample, 'g', -1, 64), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (f *Fleet) FetchDevices(ctx context.Context, name string) (*admin.Devices, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	resp, err := f.adminRequest(ctx, http.MethodGet, v.DialAddr, "devices", nil)
+	resp, err := f.adminRequest(ctx, http.MethodGet, v.AdminAddr, "devices", nil)
 	if err != nil {
 		return nil, err
 	}

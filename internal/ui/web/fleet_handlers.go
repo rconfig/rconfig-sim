@@ -39,7 +39,9 @@ func (s *Server) fleetModel() views.FleetModel {
 }
 
 func (s *Server) fleetPage(w http.ResponseWriter, r *http.Request) {
-	render(w, r, http.StatusOK, views.FleetPage(s.page("Fleet", "fleet"), s.fleetModel()))
+	m := s.fleetModel()
+	m.Checklist = s.checklist()
+	render(w, r, http.StatusOK, views.FleetPage(s.page("Fleet", "fleet"), m))
 }
 
 func (s *Server) fleetCards(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +98,10 @@ func (s *Server) unitAction(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "No instance "+name+".")
 		return
 	}
+	if v, _ := s.opt.Fleet.View(name); v.Status == fleet.StatusUnused && verb != systemd.Stop {
+		s.fail(w, r, name+" is not used by this testbench: the live build has no devices on it, so rcfg-sim would not start.")
+		return
+	}
 	if err := s.opt.Units.Do(r.Context(), verb, name); err != nil {
 		s.fail(w, r, err.Error())
 		return
@@ -110,7 +116,8 @@ func (s *Server) unitActionAll(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "Unsupported action "+verb+".")
 		return
 	}
-	vs := s.opt.Fleet.Views()
+	// Start and restart leave out instances the live build does not use.
+	vs := slices.DeleteFunc(s.opt.Fleet.Views(), func(v fleet.View) bool { return verb != systemd.Stop && v.Status == fleet.StatusUnused })
 	errs := make([]error, len(vs))
 	var wg sync.WaitGroup
 	for i, v := range vs {
@@ -149,7 +156,8 @@ func (s *Server) rollingRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	var names []string
 	for _, v := range s.opt.Fleet.Views() {
-		if v.Err == nil {
+		// An instance with no devices in the live build stays stopped.
+		if v.Err == nil && v.Status != fleet.StatusUnused {
 			names = append(names, v.Name)
 		}
 	}
@@ -219,6 +227,7 @@ func (s *Server) applyActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opt.Fleet.Poll(r.Context())
+	s.noteChange(fmt.Sprintf("Active devices %d", n))
 	s.flash(w, r, true, resultsFlash(fmt.Sprintf("Active devices %d", n), rs))
 }
 
@@ -260,6 +269,7 @@ func (s *Server) applyDelay(w http.ResponseWriter, r *http.Request) {
 	}
 	rs := s.opt.Fleet.ApplyDelay(r.Context(), lo, hi)
 	s.opt.Fleet.Poll(r.Context())
+	s.noteChange(fmt.Sprintf("Response delay %d-%d ms", lo, hi))
 	s.flash(w, r, true, resultsFlash(fmt.Sprintf("Response delay %d-%d ms", lo, hi), rs))
 }
 
@@ -313,6 +323,7 @@ func (s *Server) applyCaps(w http.ResponseWriter, r *http.Request) {
 	}
 	rs := s.opt.Fleet.ApplySessionCaps(r.Context(), caps)
 	s.opt.Fleet.Poll(r.Context())
+	s.noteChange("Session caps " + capsText(caps))
 	s.flash(w, r, true, resultsFlash("Session caps", rs))
 }
 

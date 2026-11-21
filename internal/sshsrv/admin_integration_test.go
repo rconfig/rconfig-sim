@@ -22,9 +22,11 @@ import (
 )
 
 // adminServer stands up a one-device server with a metrics listener and,
-// when withAdmin is set, the admin API mounted as cmd/rcfg-sim does it.
-// Returns the server, its SSH port and the admin base URL.
-func adminServer(t *testing.T, withAdmin bool) (*sshsrv.Server, int, string) {
+// when withAdmin is set, the admin API on its own loopback listener as
+// cmd/rcfg-sim does it. Returns the server, its SSH port and the admin base
+// URL (on the metrics port when the admin API is off, where it must 404),
+// and the metrics base URL.
+func adminServer(t *testing.T, withAdmin bool) (*sshsrv.Server, int, string, string) {
 	t.Helper()
 	tmp := t.TempDir()
 	sshPort := freePort(t)
@@ -51,16 +53,24 @@ func adminServer(t *testing.T, withAdmin bool) (*sshsrv.Server, int, string) {
 		t.Fatalf("New: %v", err)
 	}
 	if withAdmin {
-		srv.Mount(admin.Prefix, admin.Handler(srv, admin.Options{
+		mux := http.NewServeMux()
+		mux.Handle(admin.Prefix, admin.Handler(srv, admin.Options{
 			Version: "test", ListenIP: cfg.ListenIP, PortStart: cfg.PortStart, PortCount: cfg.PortCount,
 			Devices: srv.DeviceCount(),
 		}))
+		if err := srv.ServeAdmin("127.0.0.1:0", mux); err != nil {
+			t.Fatalf("ServeAdmin: %v", err)
+		}
 	}
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { srv.Shutdown(5 * time.Second) })
-	return srv, sshPort, fmt.Sprintf("http://127.0.0.1:%d/admin/v1/", metricsPort)
+	metrics := fmt.Sprintf("http://127.0.0.1:%d", metricsPort)
+	if withAdmin {
+		return srv, sshPort, "http://" + srv.AdminAddr() + "/admin/v1/", metrics
+	}
+	return srv, sshPort, metrics + "/admin/v1/", metrics
 }
 
 func adminCall(t *testing.T, method, url, body string) (int, []byte) {
@@ -76,10 +86,30 @@ func adminCall(t *testing.T, method, url, body string) (int, []byte) {
 }
 
 func TestAdmin_OffByDefault(t *testing.T) {
-	_, _, base := adminServer(t, false)
+	srv, _, base, _ := adminServer(t, false)
 	for _, p := range []string{"state", "devices", "events", "faults"} {
 		if code, _ := adminCall(t, "GET", base+p, ""); code != http.StatusNotFound {
 			t.Errorf("/admin/v1/%s with admin off: want 404, got %d", p, code)
+		}
+	}
+	if srv.AdminAddr() != "" {
+		t.Fatalf("admin listener open while off: %s", srv.AdminAddr())
+	}
+}
+
+// TestAdmin_OwnListenerOnly: the admin API is on its own listener, never on
+// the metrics one, which keeps /metrics and /healthz.
+func TestAdmin_OwnListenerOnly(t *testing.T) {
+	srv, _, base, metrics := adminServer(t, true)
+	if code, _ := adminCall(t, "GET", base+"state", ""); code != http.StatusOK {
+		t.Fatalf("admin listener: %d", code)
+	}
+	if !strings.HasPrefix(srv.AdminAddr(), "127.0.0.1:") {
+		t.Fatalf("admin address %q", srv.AdminAddr())
+	}
+	for p, want := range map[string]int{"/admin/v1/state": 404, "/metrics": 200, "/healthz": 200} {
+		if code, _ := adminCall(t, "GET", metrics+p, ""); code != want {
+			t.Errorf("metrics listener %s: %d, want %d", p, code, want)
 		}
 	}
 }
@@ -88,7 +118,7 @@ func TestAdmin_OffByDefault(t *testing.T) {
 // session gets them, the device table records the result, and an event
 // stream sees the session.
 func TestAdmin_FaultsOverAPI(t *testing.T) {
-	_, port, base := adminServer(t, true)
+	_, port, base, _ := adminServer(t, true)
 
 	// Baseline: a clean session.
 	if err := dialErr(port); err != nil {

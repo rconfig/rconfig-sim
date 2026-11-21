@@ -2,6 +2,7 @@ package sshsrv
 
 import (
 	"fmt"
+	"github.com/rcfg-sim/rcfg-sim/internal/drivers"
 	"strings"
 )
 
@@ -36,7 +37,7 @@ const infineraTidmapPageSize = 10
 func (infineraTL1) Name() string { return "infinera_tl1" }
 
 // RequiresSSHAuth: like other TL1 personalities, DTN-X authenticates in-band via ACT-USER.
-func (infineraTL1) RequiresSSHAuth() bool { return false }
+func (infineraTL1) RequiresSSHAuth() bool { return drivers.RequiresSSHAuth("infinera_tl1") }
 
 // Commands reuses the shared CmdTL1* labels rather than minting an Infinera-specific set.
 // The metric label answers "which verb", not "which vendor" - the vendor is already a

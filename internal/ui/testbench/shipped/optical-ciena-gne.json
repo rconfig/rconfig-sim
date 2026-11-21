@@ -1,0 +1,35 @@
+{
+  "name": "Optical: Ciena GNE network",
+  "description": "5,000 Ciena 6500 gateway NEs, each fronting 2 to 5 remote NEs, 30% of them dual-homed. Login inside TL1 only, like real 6500s.",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 10,
+      "families": {
+        "optical": {
+          "models": {
+            "ciena-6500-tl1-gne": 5000
+          },
+          "ssh_auth": "driver",
+          "options": {
+            "rne_dual_home_pct": 30
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 500,
+    "active_devices": "all"
+  }
+}

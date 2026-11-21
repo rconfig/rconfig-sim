@@ -1,0 +1,34 @@
+{
+  "name": "Scenario 9: heavy configs",
+  "description": "50,000 Cisco IOS devices skewed to large configs, for storage and diff stress (TEST-SCENARIOS.md scenario 9).",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 9,
+      "families": {
+        "ip": {
+          "models": {
+            "sm": 5000,
+            "md": 15000,
+            "lg": 10000,
+            "xl": 20000
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 5000,
+    "active_devices": "all"
+  }
+}

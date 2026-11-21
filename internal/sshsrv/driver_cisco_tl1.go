@@ -2,6 +2,7 @@ package sshsrv
 
 import (
 	"fmt"
+	"github.com/rcfg-sim/rcfg-sim/internal/drivers"
 	"strings"
 )
 
@@ -29,7 +30,7 @@ var ciscoENEMarker = []byte(";;ENE ")
 func (ciscoONSTL1) Name() string { return "cisco_ons_tl1" }
 
 // RequiresSSHAuth: TL1 authenticates in-band via ACT-USER.
-func (ciscoONSTL1) RequiresSSHAuth() bool { return false }
+func (ciscoONSTL1) RequiresSSHAuth() bool { return drivers.RequiresSSHAuth("cisco_ons_tl1") }
 
 // Commands reuses the shared CmdTL1* labels for shared verbs, adding only RTRV-MAP-NETWORK.
 // See the note on infineraTL1.Commands for why labels are per-verb and not per-vendor.

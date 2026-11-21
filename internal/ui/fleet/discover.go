@@ -37,7 +37,12 @@ var UnitDefaults = map[string]string{
 	"FAULT_RATES":             "",
 	"DEVICE_PROFILES":         "",
 	"PROFILE_SEED":            "42",
-	"ADMIN":                   "false",
+	"ADMIN_ADDR":              "",
+	"SSH_AUTH":                "password",
+	"COMMANDS_ROOT":           "",
+	"PASSWORD":                "admin",
+	"ENABLE_PASSWORD":         "enable123",
+	"ALLOW_EMPTY":             "false",
 }
 
 // Instance is one rcfg-sim@<name>.service, as its env file describes it.
@@ -47,12 +52,13 @@ type Instance struct {
 	ListenIP    string
 	PortStart   int
 	PortCount   int
-	MetricsAddr string // as configured
-	DialAddr    string // host:port the controller dials (127.0.0.1 for a wildcard bind)
+	MetricsAddr string // as configured: /healthz and /metrics
+	DialAddr    string // host:port the controller dials for them (127.0.0.1 for a wildcard bind)
+	AdminAddr   string // ADMIN_ADDR: the admin API's loopback listener; "" when off
 	Manifest    string
 	Env         map[string]string // effective values: the file over UnitDefaults
 	Err         error             // the env file could not be read or has bad values
-	PortClash   []string          // other instances on the same metrics port
+	PortClash   []string          // instances whose metrics or admin listener shares a port with this one's
 }
 
 // Discover reads every *.env in dir (*.env.sample does not match) and
@@ -101,6 +107,7 @@ func load(path string) Instance {
 	inst.ListenIP = inst.Env["LISTEN_IP"]
 	inst.Manifest = inst.Env["MANIFEST"]
 	inst.MetricsAddr = inst.Env["METRICS_ADDR"]
+	inst.AdminAddr = strings.TrimSpace(inst.Env["ADMIN_ADDR"])
 	var errs []string
 	if inst.PortStart, err = strconv.Atoi(inst.Env["PORT_START"]); err != nil {
 		errs = append(errs, "PORT_START "+strconv.Quote(inst.Env["PORT_START"]))
@@ -110,6 +117,10 @@ func load(path string) Instance {
 	}
 	if inst.DialAddr, err = dialAddr(inst.MetricsAddr); err != nil {
 		errs = append(errs, "METRICS_ADDR "+strconv.Quote(inst.MetricsAddr))
+	}
+	if inst.AdminAddr != "" && !loopbackAddr(inst.AdminAddr) {
+		// rcfg-sim refuses to start with it, so say so on the card.
+		errs = append(errs, "ADMIN_ADDR "+strconv.Quote(inst.AdminAddr)+" (must be a loopback host:port)")
 	}
 	if len(errs) > 0 && inst.Err == nil {
 		inst.Err = fmt.Errorf("bad value: %s", strings.Join(errs, ", "))
@@ -135,27 +146,46 @@ func dialAddr(listen string) (string, error) {
 // addresses.
 func markClashes(insts []Instance) {
 	type bind struct {
+		inst       int
 		host, port string
 		wild       bool
 	}
-	binds := make([]bind, len(insts))
+	var binds []bind
 	for i, in := range insts {
-		host, port, err := net.SplitHostPort(in.MetricsAddr)
-		if err != nil {
-			continue
-		}
-		binds[i] = bind{host, port, host == "" || host == "0.0.0.0" || host == "::"}
-	}
-	for i := range insts {
-		for j := range insts {
-			if i == j || binds[i].port == "" || binds[i].port != binds[j].port {
+		for _, addr := range []string{in.MetricsAddr, in.AdminAddr} {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil || port == "" {
 				continue
 			}
-			if binds[i].wild || binds[j].wild || binds[i].host == binds[j].host {
-				insts[i].PortClash = append(insts[i].PortClash, insts[j].Name)
+			binds = append(binds, bind{i, host, port, host == "" || host == "0.0.0.0" || host == "::"})
+		}
+	}
+	for a := range binds {
+		for b := range binds {
+			x, y := binds[a], binds[b]
+			if a == b || x.port != y.port || !(x.wild || y.wild || x.host == y.host) {
+				continue
+			}
+			name := insts[y.inst].Name
+			if !slices.Contains(insts[x.inst].PortClash, name) {
+				insts[x.inst].PortClash = append(insts[x.inst].PortClash, name)
 			}
 		}
 	}
+}
+
+// loopbackAddr reports whether addr is host:port on a loopback address, as
+// rcfg-sim requires of ADMIN_ADDR.
+func loopbackAddr(addr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Desired is the config an instance's env file asks for, in the shape the

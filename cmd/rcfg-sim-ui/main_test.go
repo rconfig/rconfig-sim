@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/jobs"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/uitest"
 )
 
 func TestCheckRemovedFlags(t *testing.T) {
@@ -78,5 +81,27 @@ func TestRefusesToStartWithoutCredentials(t *testing.T) {
 		if err == nil || !strings.Contains(string(out), c.want) {
 			t.Errorf("%s: want exit with %q, got %v\n%s", desc, c.want, err, out)
 		}
+	}
+}
+
+func TestSettingsHashCmd(t *testing.T) {
+	gen := filepath.Join(t.TempDir(), "rcfg-sim-gen")
+	uitest.WriteFakeGen(t, gen)
+	layout := []string{"--gen-bin", gen, "--ip-base", "10.0.0.1", "--ip-count", "2", "--port-start", "10000", "--devices-per-ip", "3", "--seed", "1"}
+	want := jobs.HashSettings(map[string]int{"sm": 4, "md": 2}, 1, map[string]string{},
+		jobs.Layout{IPBase: "10.0.0.1", IPCount: 2, PortStart: 10000, DevicesPerIP: 3})
+	// A distribution becomes the generator's counts (6 x 60/40 = 4 + 2),
+	// so it hashes like the same counts asked for directly.
+	for _, extra := range [][]string{{"--count", "6", "--distribution", "md:40, sm:60"}, {"--counts", "sm:4,md:2"}} {
+		got, err := settingsHashCmd(append(append([]string{}, layout...), extra...))
+		if err != nil || got != want {
+			t.Fatalf("%v: %s %v, want %s", extra, got, err, want)
+		}
+	}
+	if _, err := settingsHashCmd([]string{"--count", "6"}); err == nil {
+		t.Fatal("missing layout: want an error")
+	}
+	if _, err := settingsHashCmd(append(layout, "--counts", "sm:1", "--distribution", "sm:100")); err == nil {
+		t.Fatal("both forms: want an error")
 	}
 }

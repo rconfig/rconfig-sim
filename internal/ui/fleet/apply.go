@@ -3,10 +3,12 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,7 +65,11 @@ type request struct {
 //   - Down: the env file is written with the requested values, marked
 //     NextStart, so a stopped instance does not come back on old settings.
 //   - Anything else: skipped, nothing written.
+//
+// Unused instances (no devices in the live build) are left out entirely:
+// no result, nothing written.
 func (f *Fleet) fanOut(ctx context.Context, targets []View, reqs func(View) []request) []Result {
+	targets = slices.DeleteFunc(slices.Clone(targets), func(v View) bool { return v.Status == StatusUnused })
 	results := make([]Result, len(targets))
 	var wg sync.WaitGroup
 	for i, v := range targets {
@@ -97,7 +103,7 @@ func (f *Fleet) applyUp(ctx context.Context, v View, rqs []request) Result {
 	defer cancel()
 	keys := map[string]string{}
 	for _, rq := range rqs {
-		st, err := f.put(ctx, v.DialAddr, rq.path, rq.body)
+		st, err := f.put(ctx, v.AdminAddr, rq.path, rq.body)
 		if err != nil {
 			res.Err = err
 			break
@@ -310,7 +316,7 @@ func (f *Fleet) ApplySessionCaps(ctx context.Context, caps map[string]int64) []R
 
 // activeWeight is an instance's share weight in the active-device split:
 // an up instance's device count, a down instance's PORT_COUNT from its env
-// file (section 5.4). Other states take no share.
+// file (section 5.4). Other states, unused among them, take no share.
 func activeWeight(v View) (int, bool) {
 	switch v.Status {
 	case StatusUp:
@@ -381,6 +387,28 @@ func (f *Fleet) ApplyActive(ctx context.Context, target int) ([]Result, error) {
 	return f.fanOut(ctx, targets, func(v View) []request { return []request{activeRequest(split[v.Name])} }), nil
 }
 
+// ApplyInstances sets each named instance's whole runtime config (faults,
+// profiles, delay window, session cap, active devices) to its entry in
+// want, as a testbench start does. Instances not in want are left alone.
+func (f *Fleet) ApplyInstances(ctx context.Context, want map[string]Desired) []Result {
+	var targets []View
+	for _, v := range f.Views() {
+		if _, ok := want[v.Name]; ok {
+			targets = append(targets, v)
+		}
+	}
+	return f.fanOut(ctx, targets, func(v View) []request {
+		d := want[v.Name]
+		return []request{
+			faultsRequest(d.Faults),
+			profilesRequest(d.ProfileSeed, d.ProfileRules),
+			delayRequest(d.DelayMinMS, d.DelayMaxMS),
+			capRequest(d.MaxSessions),
+			activeRequest(d.ActiveDevices),
+		}
+	})
+}
+
 // Reapply pushes an up instance's env file settings to its live config,
 // ending drift. The env file is the source of truth and is not written.
 func (f *Fleet) Reapply(ctx context.Context, name string) Result {
@@ -403,4 +431,93 @@ func (f *Fleet) Reapply(ctx context.Context, name string) Result {
 		{path: "active", body: map[string]int{"active_devices": d.ActiveDevices}},
 	}
 	return f.fanOut(ctx, []View{v}, all(rqs...))[0]
+}
+
+// KeysPending lists the named instances whose env file (the unit default
+// for a key left out) differs from set in any key: they need it written
+// and a restart. The keys are ones the admin API cannot change (SSH_AUTH,
+// and from Phase 9 COMMANDS_ROOT, PASSWORD and ENABLE_PASSWORD).
+func (f *Fleet) KeysPending(names []string, set map[string]string) ([]string, error) {
+	insts, err := Discover(f.opt.EnvDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, in := range insts {
+		if !slices.Contains(names, in.Name) {
+			continue
+		}
+		for k, v := range set {
+			if in.Env[k] != v {
+				out = append(out, in.Name)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// SetKeys writes set to every named instance's env file where it differs
+// and returns those instances. It takes effect when they restart.
+func (f *Fleet) SetKeys(names []string, set map[string]string) ([]string, error) {
+	pending, err := f.KeysPending(names, set)
+	if err != nil {
+		return nil, err
+	}
+	insts, _ := Discover(f.opt.EnvDir)
+	var errs []error
+	for _, in := range insts {
+		if slices.Contains(pending, in.Name) {
+			if err := f.writeEnv(in.EnvPath, set); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", in.Name, err))
+			}
+		}
+	}
+	return pending, errors.Join(errs...)
+}
+
+// RestoreKeys puts back owned keys on one instance's env file as they were
+// saved: a nil value removes the key, any other sets it. It reports whether
+// the instance's effective values (the file over UnitDefaults) changed, so
+// the caller knows a restart is needed.
+func (f *Fleet) RestoreKeys(name string, keys map[string]*string) (bool, error) {
+	insts, err := Discover(f.opt.EnvDir)
+	if err != nil {
+		return false, err
+	}
+	for _, in := range insts {
+		if in.Name != name {
+			continue
+		}
+		changed := false
+		for k, v := range keys {
+			want := UnitDefaults[k]
+			if v != nil {
+				want = *v
+			}
+			if in.Env[k] != want {
+				changed = true
+			}
+		}
+		m, _ := f.envMu.LoadOrStore(in.EnvPath, &sync.Mutex{})
+		mu := m.(*sync.Mutex)
+		mu.Lock()
+		defer mu.Unlock()
+		return changed, envfile.Restore(in.EnvPath, keys)
+	}
+	return false, fmt.Errorf("no instance %q", name)
+}
+
+// SSHAuthPending lists the named instances whose env file's SSH_AUTH (the
+// unit default when left out) is not value: they need it written and a
+// restart (Phase 8).
+func (f *Fleet) SSHAuthPending(names []string, value string) ([]string, error) {
+	return f.KeysPending(names, map[string]string{envfile.SSHAuth: value})
+}
+
+// SetSSHAuth writes SSH_AUTH=value to every named instance's env file
+// where it differs and returns those instances. It takes effect when they
+// restart.
+func (f *Fleet) SetSSHAuth(names []string, value string) ([]string, error) {
+	return f.SetKeys(names, map[string]string{envfile.SSHAuth: value})
 }

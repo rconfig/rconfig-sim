@@ -49,6 +49,10 @@ func cienaModel() model {
 		template: "ciena_tl1",
 		tmplFile: "ciena_tl1_eqpt.tmpl",
 		build:    func(cfg Config, index int, m model) any { return buildCienaEqpt(cfg, index) },
+
+		family:      FamilyOptical,
+		description: "Ciena 6500 node: ACT-USER login, then RTRV-EQPT shelf inventory (7-slot 6500). No remote NEs.",
+		avgBytes:    1_700,
 	}
 }
 
@@ -62,6 +66,14 @@ func cienaGNEModel() model {
 		template: "ciena_tl1",
 		tmplFile: "ciena_tl1_gne.tmpl",
 		build:    func(cfg Config, index int, m model) any { return buildCienaGNE(cfg, index) },
+
+		family:      FamilyOptical,
+		description: "Ciena 6500 gateway NE fronting 2 to 5 remote NEs, addressed by TID; RTRV-NE-LIST lists them.",
+		avgBytes:    7_300,
+		options: []ModelOption{{
+			Name: "rne_dual_home_pct", Flag: "--rne-dual-home-pct", Type: "int", Min: 0, Max: 100, Default: 0,
+			Help: "Percent of each gateway's remote NEs drawn from a shared pool, so the same RNE is reachable through more than one gateway.",
+		}},
 	}
 }
 

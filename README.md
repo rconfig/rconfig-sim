@@ -618,6 +618,8 @@ ss -tlnp | grep 12000
 
 ## Full deployment
 
+**The short way.** On a vanilla host, `sudo make setup` does steps 1 to 7 below in one go and sets up the [web UI](#web-ui); see [One-step setup](#one-step-setup). The steps here are the manual equivalent, and what to follow on a host you want to set up by hand.
+
 Deployment sequence for a production 50k-device simulator host. Unlike the quickstart (which ran a foreground process bound to loopback), this sets up the real operational shape: a dedicated service account, 20 systemd instances bound to 20 IP aliases, kernel tuning for high-density network workloads, and a generated manifest ready for rConfig to import as a device inventory.
 
 **What you'll have at the end:** a simulator host running 50,000 fake Cisco IOS devices across 20 IP addresses, independently restartable per IP, emitting Prometheus metrics, ready for rConfig to poll.
@@ -1226,19 +1228,19 @@ The manifest takes an optional 11th column, `profile`, holding one profile witho
 
 ## Admin API
 
-The admin API reads and changes an instance's faults, device profiles, response delay, session cap and active device count while it runs, and serves live activity: a state code per device and a sampled stream of session events. It is **off by default**. Turn it on with `--admin` (env `ADMIN=true`); it is served under `/admin/v1/` on the `--metrics-addr` listener, next to `/metrics` and `/healthz`. With `--admin` off, every `/admin/v1/` path returns 404.
+The admin API reads and changes an instance's faults, device profiles, response delay, session cap and active device count while it runs, and serves live activity: a state code per device and a sampled stream of session events. It is **off by default**. Turn it on with `--admin-addr` (env `ADMIN_ADDR`): it is served under `/admin/v1/` on its own listener at that address, which must be a loopback address with a port of its own, e.g. `127.0.0.1:9200`. `rcfg-sim` refuses to start with any other address. `/metrics` and `/healthz` stay on `--metrics-addr`, which may face the network for Prometheus; that listener never serves `/admin/v1/`.
 
 ```bash
-rcfg-sim --admin --metrics-addr 127.0.0.1:9100 ...
+rcfg-sim --admin-addr 127.0.0.1:9200 ...
 
-curl -s http://127.0.0.1:9100/admin/v1/state
+curl -s http://127.0.0.1:9200/admin/v1/state
 curl -s -X PUT \
-  -d '{"auth_fail": 0.02, "disconnect_mid": 0.005}' http://127.0.0.1:9100/admin/v1/faults
+  -d '{"auth_fail": 0.02, "disconnect_mid": 0.005}' http://127.0.0.1:9200/admin/v1/faults
 ```
 
 **Changes apply to new sessions only.** A session keeps the settings it started with. **Changes are not saved**: a restart reads the flags or env file again. To keep a change, write it to `/etc/rcfg-sim/<IP>.env` as well.
 
-**Security.** The admin API has **no authentication**: anyone who can reach it can change faults and capacity. It is meant for the [web UI](#web-ui) on the same host, so keep `--metrics-addr` on loopback (`127.0.0.1:<port>`) whenever `--admin` is on; `make setup` does. The simulator logs a warning when the API is on any other address.
+**Security.** The admin API has **no authentication**: anyone who can reach it can change faults and capacity. That is why it has its own listener and `rcfg-sim` only accepts a loopback address for it: only the [web UI](#web-ui) on the same host needs it.
 
 All bodies are JSON. Errors are `4xx` with `{"error": "..."}`; unknown fields are rejected. Every successful `PUT` returns the full state, as `GET /admin/v1/state` does, with `generation` one higher.
 
@@ -1298,7 +1300,7 @@ The outcomes are those of `rcfgsim_sessions_total{result=...}`. A device with a 
 `kind` is `session_start`, `session_end` (with `outcome`, and the session's last `fault` if any) or `fault` (with the fault type). `t` is unix milliseconds, `bytes` the bytes sent in the session so far and `ms` the time since the session started. `sample` is the share of events kept, in `(0,1]`, default `0.01`. Each stream gets at most 200 events per second; events past that, or that a slow client cannot keep up with, are dropped and reported once a second as `{"kind":"dropped","n":123}`. With no stream open, events cost nothing.
 
 ```bash
-curl -sN 'http://127.0.0.1:9100/admin/v1/events?sample=0.1'
+curl -sN 'http://127.0.0.1:9200/admin/v1/events?sample=0.1'
 ```
 
 ---
@@ -1307,13 +1309,43 @@ curl -sN 'http://127.0.0.1:9100/admin/v1/events?sample=0.1'
 
 `rcfg-sim-ui` is an optional browser UI for the simulator fleet on one host. It finds every instance from its env file, shows each one's state, starts, stops and restarts them through systemd, and changes faults, device profiles, response delay, session caps and active devices across the fleet through each instance's [admin API](#admin-api). **Every change is saved to the instance's env file**, so a restart keeps it. It is a separate binary and unit; nothing changes unless you install and start it.
 
+### One-step setup
+
+On a vanilla host, one command installs and starts everything: the simulator, one instance per IP, a first build, and the UI with a login.
+
+```bash
+make build
+sudo make setup IPS=20 BASE_IP=10.50.0.1 DEVICES_PER_IP=2500 PORT_START=10000
+```
+
+It does, in order: the `rcfgsim` user, `make install` and `make install-ui` (with the `rcfgsim-ui` user and group), `sysctl --system`, persistent IP aliases (an `rcfg-sim-aliases.service` unit that runs `deploy/ip-aliases.sh` at boot), one env file per IP (`METRICS_ADDR=<METRICS_BIND>:<9100+n>`, `ADMIN_ADDR=127.0.0.1:<19100+n>`, `MANIFEST` pointing at `data/current`), a first build straight into the `data/` layout, the UI login, and finally enables and starts every unit. At the end it prints the UI password once (it is stored only as a hash) and the SSH tunnel command.
+
+| Variable | Default | |
+|---|---|---|
+| `IPS` | `20` | instances, one per IP alias |
+| `BASE_IP` | `10.50.0.1` | first IP; the rest follow on the last octet |
+| `DEVICES_PER_IP` | `2500` | devices (SSH ports) per instance |
+| `PORT_START` | `10000` | first SSH port on every IP |
+| `DEVICES` | `IPS` x `DEVICES_PER_IP` | devices in the first build; at least enough to give every instance one |
+| `INTERFACE` | `lo` | interface for the aliases; use your NIC if rConfig runs on another host |
+| `METRICS_BIND` | `127.0.0.1` | address `/metrics` listens on; `0.0.0.0` for a remote Prometheus. The admin API stays on its own loopback port either way |
+| `UI_USER`, `UI_PASSWORD` | `admin`, random | the UI login |
+
+The first build uses small configs only (`sm:100`) so it is quick; start a [testbench](#testbenches) for anything else. Its `build.json` carries the same `settings_hash` the UI computes (`rcfg-sim-ui settings-hash`), so a testbench with the same build settings reuses it instead of generating.
+
+- **Idempotent.** Running it again changes nothing that is already correct: the login is kept unless you pass `UI_PASSWORD`, a runtime setting the UI saved to an env file is kept, and only the keys setup owns are put back. To change the number of IPs, run it again with the new `IPS`; the UI cannot add or remove IPs.
+- `SETUP_FLAGS=--dry-run` prints every step without doing anything.
+- It refuses if `/etc/rcfg-sim` already holds env files it did not write: that is an existing install, which keeps using `make adopt-data` (below). `SETUP_FLAGS=--force` takes them over.
+- SELinux and firewalld are left alone; see [Full deployment, step 1](#1-system-prep).
+
 ### Install and run
+
+The manual way, for an existing install.
 
 ```bash
 # 1. Each instance needs its admin API on, on loopback (it has no auth).
 #    In every /etc/rcfg-sim/<IP>.env:
-#      ADMIN=true
-#      METRICS_ADDR=127.0.0.1:9100     # a different port per instance
+#      ADMIN_ADDR=127.0.0.1:9200       # a different port per instance
 #    then restart the instances.
 
 # 2. Install: the rcfgsim-ui user, binary, unit, polkit rule and env file.
@@ -1335,15 +1367,18 @@ ssh -L 8080:127.0.0.1:8080 <simulator-host>
 
 ### Screens
 
-- **Fleet**: one card per instance with its state (up; down, with the systemd unit state; admin API off; metrics port clash), sessions against the cap, active devices, a bytes/s sparkline and the config generation. Start, stop and restart per instance or for the whole fleet, and a rolling restart that does one instance at a time and waits for each to answer `/healthz`. Fleet-wide active devices (split across up and down instances in proportion to their device counts, a down instance by its `PORT_COUNT`, its share saved to `ACTIVE_DEVICES` for its next start), response delay, and per-instance session caps.
+- **Fleet**: one card per instance with its state (up; down, with the systemd unit state; admin API off; metrics port clash; not used by this testbench), sessions against the cap, active devices, a bytes/s sparkline and the config generation. Start, stop and restart per instance or for the whole fleet, and a rolling restart that does one instance at a time and waits for each to answer `/healthz`. Fleet-wide active devices (split across up and down instances in proportion to their device counts, a down instance by its `PORT_COUNT`, its share saved to `ACTIVE_DEVICES` for its next start), response delay, and per-instance session caps.
 - **Failures**: a rate per fault type (slider and number, 0 to 10% by default, extendable to 100%, with a live estimate of events per full poll), device profile rules and seed, and a "who is affected" list of the hostnames the rules pick, the same ones `rcfg-sim` picks, with copy to clipboard. Presets: three built in (Flaky WAN, Auth storm, Slow core) and any you save, under `--data-dir/presets/`.
-- **Build**: regenerate the fleet with a new count, seed and distribution, with an estimate first, a streamed job log, and rollback (see [Builds](#builds)).
+- **Build**: regenerate the fleet with new per-model counts and seed, with an estimate first, a streamed job log, and rollback (see [Builds](#builds)).
+- **Devices**: every device in the live build (or a testbench's or run's), whether it is active and why not, with filters, CSV and JSON export and a Test login (see [Devices](#devices)). The header search box finds a hostname.
+- **Testbenches** and **Runs**: save a whole test setup, start, restart and stop it, and keep a record of every run (see [Testbenches](#testbenches) and [Runs](#runs)). While one is active, a pill in the header on every screen shows its name, state and elapsed time, with Stop and Restart.
+- **Scenarios**: the library of curated topologies such as mesh-campus, each with a topology diagram, its devices and **Create testbench from this scenario** (see [Scenario packages](#scenario-packages)).
 - **Activity**: live observation while the page is open.
   - **Heatmap**: every device as one cell, coloured by state (never, ok, auth_fail, disconnect, error, hang, inactive, active, plus unreachable for an instance that is not reporting), with a count per state in the legend. Hover shows the hostname, state and last seen; click opens a panel with the device's address, profile and recent events. 50,000 devices fit as a 250 x 200 grid, refreshed every 2 seconds.
   - **Charts** (10-minute window): active sessions, sessions per second by outcome, bytes per second, and faults per second by type, worked out by the UI from each instance's `/metrics` counters on every poll. No Prometheus server is needed; an instance restart (counters back to zero) is handled. Nothing is kept beyond the window.
   - **Event tail**: sampled session events from every instance, filterable by hostname, outcome and fault, with a pause button. Each instance caps its stream at 200 events per second and the UI caps each browser at 200; drops at either are counted on the page.
 
-Nothing applies until you press **Apply**; the pending-changes bar shows what will change. A change goes to every instance that is up, and each instance's env file gets exactly the settings that instance accepted: if it takes the faults but refuses the profiles, only the faults are saved. A **down** instance's env file is written anyway and the result says "applies on next start", so a stopped instance does not come back on old settings. Instances with the admin API off, a bad env file or a metrics port clash are skipped and listed; nothing is written for them.
+Nothing applies until you press **Apply**; the pending-changes bar shows what will change. A change goes to every instance that is up, and each instance's env file gets exactly the settings that instance accepted: if it takes the faults but refuses the profiles, only the faults are saved. A **down** instance's env file is written anyway and the result says "applies on next start", so a stopped instance does not come back on old settings. Instances with the admin API off, a bad env file or a metrics port clash are skipped and listed; nothing is written for them. Instances **not used by this testbench** (no devices in the live build, as when a scenario needs fewer instances than the host has) are stopped and left out of every fleet-wide change, the active-device split, drift checks and rolling restarts; the card's Start is disabled, since such an instance would only idle, and they start again with a testbench that needs them.
 
 **Drift.** On every poll the UI compares each instance's live config with its env file. A difference, from a hand edit or a failed write, shows as a drift badge on the card. **Re-apply** pushes the env file's settings to the instance.
 
@@ -1351,7 +1386,7 @@ The Activity page holds one connection per instance to its `/admin/v1/events` st
 
 ### Builds
 
-The **Build** screen regenerates every device config with a new device count, seed and distribution (a weight per model, totalling 100), then restarts the fleet onto it one instance at a time. It shows a disk, RAM and time estimate first, and refuses before writing anything when:
+The **Build** screen regenerates every device config with a device count per model (the same count rows as the testbench flow, grouped by family; the total is their sum) and a seed, then restarts the fleet onto it one instance at a time. It shows a disk, RAM and time estimate first, and refuses before writing anything when:
 
 - the count would leave an instance with no devices (the generator fills IPs in order, and an empty instance will not start). To run fewer devices, use **Active devices** on the Fleet screen instead;
 - the count needs more IP aliases than there are instances. The screen shows the exact root-only steps (aliases, env files, enabling the units), then you build again;
@@ -1368,7 +1403,7 @@ Each build lives in its own directory and a symlink says which is live, so nothi
     └── 20261030-1640/                   previous build, kept for rollback
 ```
 
-The instances read `MANIFEST=/opt/rcfg-sim/data/current/manifest.csv`. A build generates into a new `builds/<timestamp>/` directory (a failed run deletes it and leaves `current` alone), swaps `current`, and does a rolling restart. If the restart stops on an instance, the screen offers **Roll back**, which points `current` at the previous build and restarts again. After a successful build only the live build and the one before it are kept. A build reuses the live build's login credentials and its other generator options (from `build.json`); job logs are kept in `--data-dir/jobs/`.
+The instances read `MANIFEST=/opt/rcfg-sim/data/current/manifest.csv`. A build generates into a new `builds/<timestamp>/` directory (a failed run deletes it and leaves `current` alone), swaps `current`, and does a rolling restart. If the restart stops on an instance, the screen offers **Roll back**, which points `current` at the previous build and restarts again. Builds are kept so that switching between [testbenches](#testbenches) can reuse one instead of generating again: `--keep-builds` (default 3, the live one included) are kept, and the least recently used beyond that are removed after a successful build. The live build and the one rollback would go to are the most recently used, so rollback always works. A build reuses the live build's login credentials and its other generator options (from `build.json`); job logs are kept in `--data-dir/jobs/`. The models in the count rows come from the generator's catalogue. The UI builds with `--counts`; `build.json` records them as `counts`, so a build from this screen and a testbench with the same counts are the same build. While a scenario's build is live, a new build takes its login credentials from the most recently used generated build (or the generator's defaults), never from the scenario's manifest.
 
 **Adopting an existing install.** Installs set up before the UI keep `configs/` and `manifest.csv` directly under `/opt/rcfg-sim`, and stay that way until you choose to move them: the unit's and generator's defaults are unchanged. Until then the Build screen shows these steps instead of the form. Once, as root:
 
@@ -1381,17 +1416,168 @@ sudo make install-ui && sudo systemctl restart rcfg-sim-ui   # the UI unit may w
 
 The UI never gets write access to the rest of `/opt/rcfg-sim`, so it cannot replace the simulator binaries.
 
+### Testbenches
+
+A testbench is a whole test setup under one name: its devices (how many of each model, by device family), the runtime settings (faults, device profiles, response delay, session cap, active devices), optional per-instance overrides, and an optional duration after which it stops itself. Each is a JSON file in `--data-dir/testbenches/`:
+
+```json
+{
+  "name": "Auth storm, 20k",
+  "description": "15% auth failures across 20,000 devices, plus an optical core",
+  "version": 3,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 42,
+      "families": {
+        "ip":      { "models": { "sm": 8000, "md": 6000, "lg": 4000 } },
+        "optical": { "models": { "ciena-6500-tl1-gne": 2000 },
+                     "ssh_auth": "driver",
+                     "options": { "rne_dual_home_pct": 30 } }
+      }
+    }
+  },
+  "runtime": {
+    "faults": { "auth_fail": 0.15 },
+    "profiles": { "seed": 42, "rules": [] },
+    "delay_ms": { "min": 50, "max": 500 },
+    "max_sessions": 5000,
+    "active_devices": "all"
+  },
+  "overrides": { "10.50.0.3": { "faults": { "disconnect_mid": 0.2 } } },
+  "duration": "2h"
+}
+```
+
+- **Devices** come in families, from the generator's catalogue: `ip` (the Cisco IOS size buckets) and `optical` (the TL1 models). A family that is absent is not in the fleet; a testbench with both is a service provider mix. Counts are exact devices per model, and the total must fill every instance as a build does.
+- **Scenario testbenches** take their devices from a [scenario package](#scenario-packages) instead: `"devices": { "source": "scenario", "scenario": { "id": "mesh-campus", "version": 1 } }`. The behaviour half is the same; overrides apply to the instances the scenario uses.
+- **SSH login** (`ssh_auth`, under `optical` because that is where it matters) sets every instance's `--ssh-auth`: `driver`, "login inside TL1 only, like real 6500s" (IP devices still ask for their SSH password); `password`, "SSH password first, then TL1 login" (the default); `none`, "no SSH password at all", for optical-only fleets only. The UI writes it as `SSH_AUTH` to the env files; a change needs a restart, which Start does.
+- **Model options** such as `rne_dual_home_pct` are the catalogue's, checked against its ranges.
+- Testbench files from before this format (with a `build` section) load unchanged: their distribution becomes exact counts of the same total, each model in its family.
+- `runtime` uses the [admin API](#admin-api)'s shapes; `active_devices` is a fleet total or `"all"`, split across instances by device count. An override, keyed by instance IP, can replace any runtime value for that instance only.
+- The list says whether each testbench fits this host (enough instances and IPs, override IPs that exist) and why not. One that does not fit can still be saved, exported and edited, but not started.
+- The list is grouped by kind (Enterprise IP, Optical transport, Service provider mix, Topology scenarios), shipped and your own together, each marked **Shipped** or **Yours**; a filter shows one or the other. A testbench that no longer validates against this host's generator or scenario library (for example an old file with a generator option the generator no longer has) is listed under **Needs attention** with the reason. It is never dropped; edit and save it to fix it. It cannot start until then.
+- **Shipped testbenches**, built in and read-only: Enterprise IP ([TEST-SCENARIOS.md](TEST-SCENARIOS.md) scenarios 3 to 9), Optical (*Ciena GNE network*, 30% of remote NEs dual-homed; *three-vendor mix* of Ciena, Infinera and Cisco ONS), *Service provider mix* (IP and optical together) and *Topology: mesh campus* (the [mesh-campus](scenarios/mesh-campus/) scenario). **Duplicate** makes an editable copy.
+- **New testbench** is a guided flow in four steps. *What are you testing*: Enterprise IP fleet, Optical transport (TL1), Service provider mix, Topology scenario, or start from a shipped testbench. *Devices*: only the panels that apply: count rows per model with presets for IP, for optical the SSH login choice and the optical options with a short explanation of dual-homed remote NEs, and for a topology scenario one card per package. *Behaviour*: faults and profiles (load a preset), delays, session cap, active devices, overrides, duration. *Review and start*: one sentence saying what will happen, the device mix, whether a kept build is reused or one is generated, any restart needed and any instances left unused; then **Save** or **Save and start**. Editing opens the same steps with the kind fixed.
+- **Save** bumps the version; editing a shipped testbench saves a new one. **Export** downloads the JSON; **Import** uploads one.
+
+**Starting** a testbench is one job, sharing the one-job-at-a-time rule with builds and rolling restarts:
+
+1. Switch to a kept build with the same build settings, or generate one (as the Build screen does). A scenario testbench installs its package as a build instead (see [Scenario packages](#scenario-packages)).
+2. Apply the runtime settings and overrides to every instance it uses and its env file. Stop the instances it does not use.
+3. Start the instances that are down; rolling-restart the rest if the build changed, or if their SSH login, command files or passwords changed.
+4. Wait until every instance is up, its live settings match the testbench and it shows no drift, for up to `--start-timeout` (default 120 s, counted after any rolling restart). If that does not happen, the run is marked failed with the instances that did not match; nothing is rolled back.
+
+Only one testbench is active at a time; starting another asks first, then stops the active one. **Stop** stops every instance and ends the run. **Restart** restarts every instance, one at a time, with the same testbench, in the same run. A testbench with a `duration` stops itself when it is up. The active testbench is kept in `--data-dir/active.json`, so restarting the UI resumes it, auto-stop timer included.
+
+**Changes during a run.** You can still change settings on the Fleet and Failures screens while a testbench runs. Each change is recorded in the run, and the header pill shows the testbench as **modified**, with **Save to testbench** (writes the fleet's current settings into it as a new version; a shipped one is saved as a copy) and **Revert** (re-applies the testbench's settings).
+
+### Scenario packages
+
+A scenario is a curated set of devices whose configs and command output agree with each other, such as [mesh-campus](scenarios/mesh-campus/): three switches across EOS, Junos and IOS whose LLDP and CDP neighbours match on both ends. The **Scenarios** screen lists them as cards (device count, drivers, whether it fits this host); pick one to see its topology diagram, its devices and its suggested behaviour, then **Create testbench from this scenario**.
+
+A package is a folder:
+
+```
+mesh-campus/
+├── scenario.json     # what it is (below)
+├── manifest.csv      # rcfg-sim-gen's manifest format; config_file relative to the folder
+├── configs/          # one config per device
+├── commands/         # optional: <hostname>/<slug>.txt, as for --commands-root
+└── README.md         # optional
+```
+
+```json
+{
+  "id": "mesh-campus",
+  "name": "Mesh campus",
+  "description": "Three switches with matching LLDP and CDP neighbours across EOS, Junos and IOS.",
+  "version": 1,
+  "drivers": ["cisco_ios", "junos"],
+  "auth": { "mode": "any_password" },
+  "ssh_auth": "password",
+  "topology": {
+    "nodes": [{ "id": "core-01", "tier": 0 }, { "id": "dist-01", "tier": 1 }, { "id": "access-01", "tier": 2 }],
+    "links": [["core-01", "dist-01"], ["core-01", "access-01"]]
+  },
+  "suggested_runtime": { "faults": {}, "delay_ms": { "min": 50, "max": 300 } }
+}
+```
+
+- `id` must be the folder name (lower-case letters, digits, dashes). Raise `version` when the package changes; testbenches made for an older version need attention until they are saved again.
+- `auth.mode` is `manifest` (the instances run with the manifest's password and enable password, which must be the same on every row because `rcfg-sim` takes one of each) or `any_password` (empty `--password` and `--enable-password`, so any password works).
+- `ssh_auth` is the instances' `--ssh-auth` (default `password`). `topology` draws the diagram: nodes are manifest hostnames in tiers, top first. `suggested_runtime` fills a new testbench's behaviour.
+
+**Validation.** Every package is checked when the screen loads: `scenario.json` is complete; every manifest hostname has a config file inside the package; every `commands/` folder matches a hostname; every driver is registered in this `rcfg-sim`; every topology node is a manifest hostname. A package that fails is shown with the reasons and cannot be used.
+
+**Where they come from.** Shipped packages are built into `rcfg-sim-ui` (mesh-campus). Your own go in `--scenarios-dir` (default `/var/lib/rcfg-sim-ui/scenarios`), one folder each; a folder without `scenario.json` is ignored. A package dropped in shows up on the next page load, with no restart. `scenarios/example/` in this repo is not a package: it is the minimal `--commands-root` layout example.
+
+**Starting a scenario testbench** installs the package as a build: it is copied into `data/builds/<id>-v<version>-<hash>/`, every device is moved onto this host's instances (the first instance first, ports from `PORT_START`, hostnames kept), the manifest's `config_file` paths point into the build, and `build.json` records a settings hash so the next start reuses it. A scenario need not fill every instance: the ones it does not use are stopped and shown as **Not used by this testbench**. While it is active the UI also owns `COMMANDS_ROOT` (the build's `commands/`), `PASSWORD` and `ENABLE_PASSWORD` (empty for `any_password`) and `SSH_AUTH` in the env files; they need a restart, which Start does. Before taking over the first three, it saves each instance's values to `--data-dir/owned-keys/<IP>.json`. The next generated testbench puts back exactly those values, including any you set by hand (a key that was not set is removed again), deletes the snapshot and starts every instance again. A generated testbench after a generated one never touches these keys.
+
+`make setup` and every testbench start also set `ALLOW_EMPTY=true` in every instance's env file (the unit's default is `false`), so an instance a scenario leaves without devices idles after a reboot instead of failing and restarting in a loop (see `--allow-empty` under [rcfg-sim](#rcfg-sim)).
+
+### Runs
+
+Every start of a testbench is a run, kept as one JSON file in `--data-dir/runs/` (the last `--keep-runs`, default 200). A run holds the testbench exactly as started, its start and end, how it ended (stopped, auto-stopped or failed, with why), the timeline (start, build, restarts, setting changes, instances going down and coming back, stop), and totals: sessions by outcome, faults by type, bytes sent and peak open sessions, for the fleet and per instance. Totals are worked out from the instances' `/metrics` counters on every poll while the run is active, and survive instance restarts.
+
+If the UI itself is not running for part of a run, the traffic in that time is not counted: the timeline gets a `ui_gap` event with its start and end, and the run's totals are marked incomplete.
+
+A run also records the build it ran on, and has **notes** and **tags** you can edit at any time (for example the rConfig version under test, `rConfig 8.4.2 build 1203`). Click a tag to list the runs that carry it.
+
+The **Runs** screen lists them; a run's page shows the detail, links to the run's [devices](#devices) while its build is kept, and exports it as JSON or CSV (one row per instance plus the total, `/runs/<id>/export?format=json|csv`). Tick two runs and **Compare** to see their notes, tags, totals and the testbench settings that differ side by side.
+
+### Devices
+
+The **Devices** screen lists every device in the live build: hostname, family (from the catalogue), IP, port, model, login (passwords behind a reveal), profile, status with its reason, last outcome and last seen. It pages, sorts and searches on the server, so 50,000 devices stay fast. A bar above the table counts devices by status, reason and model; each count is a one-click filter, and every filter is in the URL, so a view can be bookmarked.
+
+| Status | Reason | When |
+|---|---|---|
+| active | | the instance is up and the device's port is below its active-device count |
+| inactive | `beyond active count` | the port is at or above the instance's active-device count |
+| inactive | `instance down` | the instance does not answer `/healthz` while a testbench runs (or with testbenches off) |
+| inactive | `testbench stopped` | no testbench is running and the instance is stopped |
+| inactive | `build not live` | a testbench's or run's kept build that the instances are not serving |
+| inactive | `not used by this testbench` | the instance has no devices in the live build (a scenario that needs fewer instances) |
+| unknown | `admin API off`, `bad env file`, `port clash`, `admin API error` | the instance's card state on the Fleet screen |
+| unknown | `no instance for this IP` | no instance serves that IP and port |
+
+A device with a `refuse` or `hang` profile is **active**: it answers badly on purpose, and its profile column says so.
+
+A testbench's page and a run's page have a **Devices** link for the build they use, as long as it is kept. A testbench whose build is not kept yet offers **Build it**, which generates the build and keeps it without making it live or restarting anything.
+
+Click a hostname for its drawer; every device also has its own link, `/device/<hostname>`, which opens the Devices page with its drawer. The drawer has everything in the row, the `ssh` command with a copy button, recent events, and **Test login**. Test login opens one SSH session with the manifest credentials (TL1 devices log in with `ACT-USER`), runs `show version` (`show configuration | no-more` on Junos, `RTRV-SW-VER` on TL1), and shows how long login took and the first lines of output, or where it failed. It is a normal session, so faults apply; the drawer says when a failure looks like an injected fault or the device's profile. One test at a time per browser, 10-second timeout.
+
+**Exports.** **Export CSV** and **Export JSON** download exactly the rows the current filters show, streamed. The columns are fixed, in this order:
+
+```
+hostname,ip,port,username,password,enable_password,model,status,status_reason
+```
+
+One row per device, a header row, RFC 4180 quoting, UTF-8; the JSON is an array of objects with the same keys. The file is named `rcfg-sim-<build or testbench>-<status filter>-<date>.csv`. The exports are not in any one tool's import format; map the columns in whatever imports them.
+
+Scripts can fetch exports with HTTP Basic and the UI login, on the export routes only (`/devices/export` and `/runs/<id>/export`); every other route still needs the browser session and answers 401 to Basic. Failed attempts count towards the failed-login slowing.
+
+```bash
+curl -u admin:'<password>' -o active.csv 'http://127.0.0.1:8080/devices/export?format=csv&status=active'
+curl -u admin:'<password>' 'http://127.0.0.1:8080/devices/export?format=json&testbench=smoke-a'
+```
+
+The filter parameters are `status`, `reason`, `family`, `instance`, `model`, `profile`, `outcome` and `q` (hostname or IP); `testbench=<slug>` or `run=<id>` picks that build instead of the live one.
+
+**Getting started.** Until you dismiss it, the Fleet screen shows a short checklist with live ticks: every instance up, the admin API answering on all, a testbench started, devices exported.
+
 ### Security
 
 The UI is a control plane that can stop the fleet, so it has a basic login and a few guards:
 
 - **Login.** One user. `/login` asks for the username and password; a session cookie (`HttpOnly`, `SameSite=Strict`, 12 hours, extended by use) keeps you in, and **Log out** in the header ends it. Every page, stream and action needs a session; only `/login`, `/static/*` and `/healthz` do not. Sessions live in memory, so restarting the UI logs everyone out.
 - **Credentials** come only from `/etc/rcfg-sim-ui/rcfg-sim-ui.env`: `UI_USERNAME` and `UI_PASSWORD_HASH`, a bcrypt hash, never the password. Make the hash with `rcfg-sim-ui hash-password` (it prompts twice without echo, or reads one line from a pipe). There are no flags for them, so they never appear on a command line. The UI **refuses to start** if either is missing or the hash is not valid bcrypt; there is no mode without a login.
-- **Changing the password**: put a new hash in the env file and `sudo systemctl restart rcfg-sim-ui`.
+- **Changing the password**: put a new hash in the env file and `sudo systemctl restart rcfg-sim-ui`, or run `sudo make setup UI_PASSWORD=<new password>` on a host set up with `make setup`.
 - **Failed logins** are logged with the source address, and the message never says which value was wrong. After 5 failures from one address in 5 minutes, each further attempt from it waits 30 seconds.
 - It listens on `127.0.0.1:8080` by default. It is plain HTTP, so use an SSH tunnel, or set `UI_ADDR` deliberately on a private lab network; it logs "plain HTTP: use an SSH tunnel or a private network" on any non-loopback address.
 - **Host check**: requests whose `Host` header is not the listen address, `localhost` or `127.0.0.1` get 403, which stops DNS rebinding. Reach it by another name (a lab DNS name, or when listening on `0.0.0.0`) by adding that name with `--ui-allowed-hosts`.
 - State-changing requests must carry the `HX-Request` header htmx sends, which a cross-site form cannot.
+- **HTTP Basic** with the UI login is accepted on the read-only export routes only (`/devices/export`, `/runs/<id>/export`), for `curl -u`. Every other route answers 401 to it. Failed attempts count towards the slowing above.
 - It runs as its own user, `rcfgsim-ui`. The polkit rule (`/etc/polkit-1/rules.d/50-rcfg-sim-ui.rules`) lets it start, stop and restart `rcfg-sim@*.service` and nothing else. It never runs as root and never touches IP aliases.
 - The page loads nothing from outside the host: fonts, scripts and styles are embedded, and a strict Content-Security-Policy enforces it. It works on air-gapped networks.
 
@@ -1415,15 +1601,22 @@ NoNewPrivileges=false
 --ui-allowed-hosts string  Extra Host header names accepted, comma-separated (default "")
 --env-dir string           Instance env files; each *.env is one instance (default "/etc/rcfg-sim")
 --gen-bin string           Generator binary for build jobs (default "/opt/rcfg-sim/bin/rcfg-sim-gen")
---data-dir string          Presets and job logs (default "/var/lib/rcfg-sim-ui")
+--data-dir string          Presets, testbenches, runs and job logs (default "/var/lib/rcfg-sim-ui")
+--keep-builds int          Builds kept on disk, the live one included; least recently used removed first (default 3)
+--keep-runs int            Run records kept; oldest removed first (default 200)
+--start-timeout duration   How long a testbench start waits for every instance to match, after any rolling restart (default 2m0s)
+--scenarios-dir string     Your scenario packages, one folder each, beside the built-in ones (default "/var/lib/rcfg-sim-ui/scenarios")
 --poll duration            Instance poll interval (default 2s)
 --systemctl string         Unit control command (default "systemctl"; e.g. "sudo -n systemctl")
 --log-level string         error|warn|info|debug (default "info")
 
 rcfg-sim-ui hash-password  Read a password (prompted, or one line on stdin) and print its bcrypt hash
+rcfg-sim-ui settings-hash  Print the build.json settings_hash for --counts (or --count with --distribution),
+                           --seed, --ip-base, --ip-count, --port-start, --devices-per-ip, repeatable
+                           --option name=value, and --gen-bin (the generator whose catalogue is used)
 ```
 
-Under systemd these come from `UI_ADDR`, `ENV_DIR`, `GEN_BIN`, `DATA_DIR`, `POLL`, `SYSTEMCTL` and `LOG_LEVEL` in `/etc/rcfg-sim-ui/rcfg-sim-ui.env`, alongside the login (`UI_USERNAME`, `UI_PASSWORD_HASH`); see `deploy/systemd/rcfg-sim-ui.env.sample`.
+Under systemd these come from `UI_ADDR`, `UI_ALLOWED_HOSTS`, `ENV_DIR`, `GEN_BIN`, `DATA_DIR`, `POLL`, `SYSTEMCTL`, `LOG_LEVEL`, `KEEP_BUILDS`, `KEEP_RUNS`, `START_TIMEOUT` and `SCENARIOS_DIR` in `/etc/rcfg-sim-ui/rcfg-sim-ui.env`, alongside the login (`UI_USERNAME`, `UI_PASSWORD_HASH`); see `deploy/systemd/rcfg-sim-ui.env.sample`.
 
 ### Building the UI
 
@@ -1754,7 +1947,7 @@ DIR/
 - File-served commands record under a single metric label: `rcfgsim_command_duration_seconds{command="file"}`.
 - This applies to the `cisco_ios` and `junos` drivers. TL1 drivers do not look up files.
 
-A minimal layout is in [scenarios/example/commands/](scenarios/example/commands/). A full multi-vendor scenario (EOS, Junos and IOS with matching LLDP/CDP neighbours) is in [scenarios/mesh-campus/](scenarios/mesh-campus/), with a step-by-step [playbook](scenarios/mesh-campus/PLAYBOOK.md).
+A minimal layout is in [scenarios/example/commands/](scenarios/example/commands/). A full multi-vendor scenario (EOS, Junos and IOS with matching LLDP/CDP neighbours) is in [scenarios/mesh-campus/](scenarios/mesh-campus/), with a step-by-step [playbook](scenarios/mesh-campus/PLAYBOOK.md); the web UI runs it as a testbench (see [Scenario packages](#scenario-packages)).
 
 ### `junos` driver
 
@@ -1785,10 +1978,16 @@ Config generator. Runs once per test campaign.
 --devices-per-ip int           Devices per IP (default 2500)
 --seed int64                   Random seed for determinism (default 42)
 --distribution string          Size distribution (default "sm:40,md:40,lg:15,xl:5"; buckets: sm, md, lg, xl, 2xl, 3xl, 4xl, 5xl, 6xl)
+--counts string                Exact devices per model instead of --distribution, e.g. "sm:6000,md:4000,ciena-6500-tl1-gne:2000"; --count defaults to their sum
+--rne-dual-home-pct int        Percent of GNE remote NEs shared between gateways (default 0)
 --username string              Manifest username (default "admin")
 --password string              Manifest password (default "admin")
 --enable-password string       Manifest enable password (default "enable123")
 ```
+
+`rcfg-sim-gen catalogue --json` prints the device catalogue instead of generating: the device **families** (`ip`, Enterprise IP; `optical`, Optical transport over TL1), every **model** with its family, vendor, driver, protocol (`cli` or `tl1`), a one-line description, its average config size and the generator **options** that apply to it (for example `rne_dual_home_pct` on `ciena-6500-tl1-gne`, flag `--rne-dual-home-pct`), and every **driver** with whether its devices authenticate at the SSH layer. The web UI reads every model list from it, so a model added to the generator appears in the UI without a UI change.
+
+`--counts` makes exactly the devices you ask for per model; the same counts as a distribution would give produce identical output.
 
 ### `rcfg-sim`
 
@@ -1798,12 +1997,16 @@ SSH server. One instance per IP alias.
 --listen-ip string             IP address to bind (required)
 --port-start int               First port to bind (default 10000)
 --port-count int               Number of ports (default 2500)
---manifest string              Manifest CSV with port→device mapping; config paths come from this file (required)
+--manifest string              Manifest CSV with port→device mapping; config paths come from this file, a relative one relative to the manifest's directory (required)
 --host-key string              Path to SSH host key (generated if missing)
 --username string              Accepted username; empty = any (default "admin")
 --password string              Accepted password; empty = any (default "admin")
 --enable-password string       Enable mode password (default "enable123")
 --ssh-auth string              SSH transport auth: password (all) | driver (Cisco yes, Ciena TL1 no) | none (default "password")
+--allow-empty                  With no devices in the manifest for this IP and port range, start anyway: serve /healthz,
+                               /metrics and the admin API (devices: 0), bind no SSH listeners, log that it is idle
+                               (default false: exit with an error; env ALLOW_EMPTY, false in the unit;
+                               make setup and the web UI set it to true)
 --metrics-addr string          HTTP addr for /metrics and /healthz (default "0.0.0.0:9100")
 --response-delay-ms-min int    Minimum response delay (default 50)
 --response-delay-ms-max int    Maximum response delay (default 500)
@@ -1816,7 +2019,7 @@ SSH server. One instance per IP alias.
 --max-session duration         Longest a session may last before it is closed; a hang profile adds its hang (default 5m)
 --active-devices string        Devices accepting sessions, in port order: all or 0..port-count; the rest refuse (default "all")
 --commands-root string         Per-device command output files, DIR/<hostname>/<slug>.txt (default "" = off)
---admin                        Serve the admin API (/admin/v1/*) on --metrics-addr (default false)
+--admin-addr string            Serve the admin API (/admin/v1/*) on its own listener; loopback only (default "" = off)
 --log-level string             error|warn|info|debug (default "info")
 ```
 

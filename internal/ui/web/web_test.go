@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/catalogue"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/envfile"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/fleet"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/presets"
@@ -102,7 +103,7 @@ func newEnv(t *testing.T, n int) *env {
 	e.presets = filepath.Join(t.TempDir(), "presets")
 	e.auth = testAuth(t)
 	e.session = e.auth.NewSession()
-	e.srv = New(Options{Fleet: e.fleet, Units: units, Presets: presets.NewStore(e.presets), Auth: e.auth,
+	e.srv = New(Options{Fleet: e.fleet, Units: units, Presets: presets.NewStore(e.presets), Auth: e.auth, Catalogue: testCatalogue(t),
 		Poll: time.Second, RollingWait: 3 * time.Second, FrameEvery: 100 * time.Millisecond})
 	e.http = httptest.NewServer(e.srv)
 	// The UI server first: it ends open Activity streams, which the HTTP
@@ -242,7 +243,7 @@ func TestFleetPageAndCards(t *testing.T) {
 
 	body := e.get("/fleet")
 	for _, want := range []string{"127.0.0.1", "127.0.0.2", "127.0.0.3", ">Up<", ">Down<", ">Admin API off<",
-		"1 / 3 instances up", "ADMIN=true", "<span class=\"num font-semibold\">inactive</span>", `hx-get="/fleet/cards"`} {
+		"1 / 3 instances up", "ADMIN_ADDR", "<span class=\"num font-semibold\">inactive</span>", `hx-get="/fleet/cards"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("fleet page missing %q", want)
 		}
@@ -281,7 +282,7 @@ func TestFailuresApplyFansOutAndPersists(t *testing.T) {
 		failuresForm(nil, "1", [3]string{"explode", "", "1"}),
 		failuresForm(nil, "1", [3]string{"latency", "200-800ms,refuse", "1"}),
 	} {
-		if body := e.post("/failures/apply", bad); !strings.Contains(body, "border-st-error") {
+		if body := e.post("/failures/apply", bad); !strings.Contains(body, "toast-error") {
 			t.Errorf("want an error flash for %v, got %s", bad, body)
 		}
 	}
@@ -446,7 +447,7 @@ func TestPresets(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.presets, "my-lab.json")); err != nil {
 		t.Fatal(err)
 	}
-	if body := e.get("/failures?preset=My+lab"); !strings.Contains(body, "Preset <span class=\"font-semibold\">My lab</span> loaded") || !strings.Contains(body, `value="100-200ms"`) {
+	if body := e.get("/failures?preset=My+lab"); !strings.Contains(body, "Preset My lab loaded into the form") || !strings.Contains(body, `value="100-200ms"`) {
 		t.Fatalf("load preset into form failed")
 	}
 	if body := e.post("/presets/apply", url.Values{"name": {"Auth storm"}}); !strings.Contains(body, "applied to 2 of 2") {
@@ -533,4 +534,14 @@ func TestApplyToDownInstanceSavesForNextStart(t *testing.T) {
 	if v, _ := f.Get("FAULT_RATES"); v != "auth_fail=0.03" {
 		t.Fatalf("down instance env: %q", v)
 	}
+}
+
+// testCatalogue is the real generator's catalogue.
+func testCatalogue(t testing.TB) *catalogue.Source {
+	t.Helper()
+	c, err := catalogue.Decode(uitest.CatalogueJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalogue.Static(c)
 }

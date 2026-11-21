@@ -20,6 +20,11 @@ Environment=DATA_DIR=/var/lib/rcfg-sim-ui
 Environment=POLL=2s
 Environment=SYSTEMCTL=systemctl
 Environment=LOG_LEVEL=info
+Environment=UI_ALLOWED_HOSTS=
+Environment=KEEP_BUILDS=3
+Environment=KEEP_RUNS=200
+Environment=START_TIMEOUT=120s
+Environment=SCENARIOS_DIR=/var/lib/rcfg-sim-ui/scenarios
 
 # UI_USERNAME and UI_PASSWORD_HASH (the login) reach rcfg-sim-ui only as
 # environment variables from this file, never on the command line (visible
@@ -33,7 +38,12 @@ ExecStart=/opt/rcfg-sim/bin/rcfg-sim-ui \
     --data-dir=${DATA_DIR} \
     --poll=${POLL} \
     --systemctl=${SYSTEMCTL} \
-    --log-level=${LOG_LEVEL}
+    --log-level=${LOG_LEVEL} \
+    --ui-allowed-hosts=${UI_ALLOWED_HOSTS} \
+    --keep-builds=${KEEP_BUILDS} \
+    --keep-runs=${KEEP_RUNS} \
+    --start-timeout=${START_TIMEOUT} \
+    --scenarios-dir=${SCENARIOS_DIR}
 
 Restart=on-failure
 RestartSec=5s
@@ -42,7 +52,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=rcfg-sim-ui
 
-# Presets and job logs. systemd creates /var/lib/rcfg-sim-ui for the user.
+# Presets, testbenches, runs, job logs and your scenario packages
+# (scenarios/). systemd creates /var/lib/rcfg-sim-ui for the user.
 StateDirectory=rcfg-sim-ui
 StateDirectoryMode=0750
 # New env files and temp files stay group-writable for rcfgsim-ui only.

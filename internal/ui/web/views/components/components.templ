@@ -1,0 +1,318 @@
+package components
+
+// Button is a button of the given kind. Pass htmx attributes in attrs. A
+// Danger button must carry hx-confirm (ConfirmButton does). While its htmx
+// request runs it shows a spinner and is disabled.
+templ Button(kind string, size Size, attrs templ.Attributes) {
+	<button type="button" class={ cls(buttonClass(kind, size), attrs) } hx-disabled-elt="this" { rest(attrs)... }>
+		{ children... }
+		<span class="btn-spinner htmx-indicator" aria-hidden="true"></span>
+	</button>
+}
+
+// Submit is a form's submit button.
+templ Submit(kind string, attrs templ.Attributes) {
+	<button type="submit" class={ cls(buttonClass(kind, ""), attrs) } hx-disabled-elt="this" { rest(attrs)... }>
+		{ children... }
+		<span class="btn-spinner htmx-indicator" aria-hidden="true"></span>
+	</button>
+}
+
+// ConfirmButton is a Danger button: it always asks before acting.
+templ ConfirmButton(confirm string, size Size, attrs templ.Attributes) {
+	<button type="button" class={ cls(buttonClass(Danger, size), attrs) } hx-confirm={ confirm } hx-disabled-elt="this" { rest(attrs)... }>
+		{ children... }
+		<span class="btn-spinner htmx-indicator" aria-hidden="true"></span>
+	</button>
+}
+
+// DisabledButton cannot be pressed; hovering it says why.
+templ DisabledButton(kind string, size Size, why string) {
+	<button type="button" class={ buttonClass(kind, size) } disabled title={ why } aria-disabled="true">
+		{ children... }
+	</button>
+}
+
+// LinkButton is a link that looks like a button.
+templ LinkButton(kind string, size Size, href string, attrs templ.Attributes) {
+	<a href={ templ.SafeURL(href) } class={ cls(buttonClass(kind, size)+" no-underline", attrs) } { rest(attrs)... }>{ children... }</a>
+}
+
+// Card is a bordered panel with a heading and optional help line.
+templ Card(title, help string) {
+	<section class="card">
+		if title != "" {
+			<h2 class="card-title">{ title }</h2>
+		}
+		if help != "" {
+			<p class="card-help">{ help }</p>
+		}
+		<div class={ templ.KV("card-body", title != "" || help != "") }>
+			{ children... }
+		</div>
+	</section>
+}
+
+// Panel is a plain bordered panel, for content that brings its own
+// heading (tables, drawers).
+templ Panel(attrs templ.Attributes) {
+	<section class={ cls("card", attrs) } { rest(attrs)... }>
+		{ children... }
+	</section>
+}
+
+// Field labels a form control (the children) with plain words and,
+// when help is set, an inline ? that explains it.
+templ Field(label, help string) {
+	<label class="field">
+		<span class="field-label">
+			{ label }
+			if help != "" {
+				@Help(help)
+			}
+		</span>
+		{ children... }
+	</label>
+}
+
+// Help is the inline ? beside a label: a short explanation in place.
+templ Help(text string) {
+	<details class="help">
+		<summary aria-label="Help">?</summary>
+		<span class="help-text">{ text }</span>
+	</details>
+}
+
+// Input is a text-like input (type in attrs, default text).
+templ Input(attrs templ.Attributes) {
+	<input class={ cls("input", attrs) } { rest(attrs)... }/>
+}
+
+// NumberInput is a numeric input with tabular figures.
+templ NumberInput(attrs templ.Attributes) {
+	<input type="number" class={ cls("input num", attrs) } { rest(attrs)... }/>
+}
+
+// Textarea is a multi-line input.
+templ Textarea(value string, attrs templ.Attributes) {
+	<textarea class={ cls("input", attrs) } { rest(attrs)... }>{ value }</textarea>
+}
+
+// Select is a drop-down; cur is the selected value.
+templ Select(name, cur string, opts []Option, attrs templ.Attributes) {
+	<select name={ name } class={ cls("input", attrs) } { rest(attrs)... }>
+		for _, o := range opts {
+			<option value={ o.Value } selected?={ o.Value == cur }>{ o.Label }</option>
+		}
+	</select>
+}
+
+// Checkbox is a checkbox with its label.
+templ Checkbox(label string, checked bool, attrs templ.Attributes) {
+	<label class="check">
+		<input type="checkbox" checked?={ checked } { attrs... }/>
+		<span>{ label }</span>
+	</label>
+}
+
+// Slider is a range slider with a number input beside it; both edit the
+// same value, which the number input submits as name.
+// rangeAttrs go on the slider itself (for example a different max).
+templ Slider(id, name, unit string, min, max, step, value string, attrs, rangeAttrs templ.Attributes) {
+	<div class="slider">
+		<input type="range" min={ min } max={ max } step={ step } value={ value } data-sync={ id } aria-label={ name + " slider" } { rangeAttrs... }/>
+		<span class="slider-value">
+			<input id={ id } name={ name } type="number" min={ min } max={ max } step={ step } value={ value } class={ cls("input num w-20", attrs) } { rest(attrs)... }/>
+			if unit != "" {
+				<span class="text-muted">{ unit }</span>
+			}
+		</span>
+	</div>
+}
+
+// ChoiceCards is a group of large selectable cards; the whole card is the
+// click target and the group is a radio group, so arrows and Space work.
+templ ChoiceCards(name, cur, legend string, choices []Choice, attrs templ.Attributes) {
+	<fieldset class="choice-group" { attrs... }>
+		<legend class="sr-only">{ legend }</legend>
+		for _, c := range choices {
+			<label class={ "choice-card", templ.KV("choice-disabled", c.Disabled != "") } title={ c.Disabled }>
+				<input type="radio" class="sr-only" name={ name } value={ c.Value } checked?={ c.Value == cur } disabled?={ c.Disabled != "" }/>
+				<span class="choice-head">
+					if c.Icon != "" {
+						<span class="choice-icon" aria-hidden="true">{ c.Icon }</span>
+					}
+					<span class="choice-title">{ c.Title }</span>
+				</span>
+				<span class="choice-desc">{ c.Description }</span>
+				if len(c.Badges) > 0 || c.Disabled != "" {
+					<span class="choice-badges">
+						for _, b := range c.Badges {
+							@Badge(b.Kind, b.Text)
+						}
+						if c.Disabled != "" {
+							@Badge(BadgeMuted, c.Disabled)
+						}
+					</span>
+				}
+			</label>
+		}
+	</fieldset>
+}
+
+// Segmented is 2 to 4 mutually exclusive options shown together.
+templ Segmented(name, cur, legend string, opts []Option, attrs templ.Attributes) {
+	<fieldset class="segmented-group" { attrs... }>
+		<legend class="field-label">{ legend }</legend>
+		<div class="segmented" role="radiogroup">
+			for _, o := range opts {
+				<label class="segment">
+					<input type="radio" class="sr-only" name={ name } value={ o.Value } checked?={ o.Value == cur }/>
+					<span>{ o.Label }</span>
+				</label>
+			}
+		</div>
+		for _, o := range opts {
+			if o.Help != "" && o.Value == cur {
+				<p class="field-hint">{ o.Help }</p>
+			}
+		}
+	</fieldset>
+}
+
+// Stepper is the numbered steps across the top of a guided flow. Steps
+// before current are done and, with an Href, clickable.
+templ Stepper(steps []Step, current int) {
+	<nav class="stepper" aria-label="Steps">
+		<ol>
+			for i, s := range steps {
+				<li class={ "step", "step-" + stepState(i, current) } aria-current?={ i == current }>
+					<span class="step-num num">{ itoa(i + 1) }</span>
+					if i < current && s.Goto != "" {
+						<button type="submit" name="goto" value={ s.Goto } class="step-link">{ s.Label }</button>
+					} else if i < current && s.Href != "" {
+						<a href={ templ.SafeURL(s.Href) }>{ s.Label }</a>
+					} else {
+						<span>{ s.Label }</span>
+					}
+				</li>
+			}
+		</ol>
+	</nav>
+}
+
+// CountRow is one model's row in a device panel: name, protocol badge,
+// average size, a count input with - and +, and its share of the panel.
+templ CountRow(c Count) {
+	<div class="count-row" data-count-row>
+		<div class="count-name">
+			<span class="num">{ c.Model }</span>
+			if c.Protocol != "" {
+				@Badge(BadgeProtocol, c.Protocol)
+			}
+			if c.Description != "" {
+				<span class="count-desc">{ c.Description }</span>
+			}
+		</div>
+		<span class="count-size num">{ c.AvgSize }</span>
+		<span class="count-input">
+			<button type="button" class="btn btn-ghost btn-sm" data-step="-1" aria-label={ "fewer " + c.Model }>−</button>
+			<input type="number" min="0" step="1" name={ c.Name } value={ itoa(c.Value) } class="input num w-24" aria-label={ c.Model + " devices" }/>
+			<button type="button" class="btn btn-ghost btn-sm" data-step="1" aria-label={ "more " + c.Model }>+</button>
+		</span>
+		<span class="share-bar" aria-label={ "share " + pct(c.Share) }><span class="share-fill" style={ "width:" + pct(c.Share) }></span></span>
+	</div>
+}
+
+// Badge is a small label (9.6).
+templ Badge(kind, text string) {
+	<span class={ "badge", "badge-" + kind }>{ text }</span>
+}
+
+// Summary is the one plain sentence above a primary action.
+templ Summary(text string) {
+	<p class="summary">{ text }</p>
+}
+
+// Actions is the bottom-right action bar of a form: the summary sentence,
+// then the buttons (one primary).
+templ Actions(summary string) {
+	<div class="actions">
+		if summary != "" {
+			@Summary(summary)
+		}
+		<div class="actions-buttons">
+			{ children... }
+		</div>
+	</div>
+}
+
+// Advanced folds rarely used options, closed by default; changed is how
+// many differ from their defaults.
+templ Advanced(changed int) {
+	<details class="advanced">
+		<summary>
+			Advanced
+			if changed > 0 {
+				<span class="text-muted">({ itoa(changed) } changed)</span>
+			}
+		</summary>
+		<div class="advanced-body">
+			{ children... }
+		</div>
+	</details>
+}
+
+// Empty is a list's empty state: what it is, and the next action
+// (children).
+templ Empty(title, text string) {
+	<div class="empty">
+		<p class="empty-title">{ title }</p>
+		if text != "" {
+			<p class="empty-text">{ text }</p>
+		}
+		{ children... }
+	</div>
+}
+
+// Toast confirms a finished action in one line. OK toasts fade away;
+// warnings and errors stay until dismissed.
+templ Toast(kind, text string, lines []string) {
+	<div class={ "toast", "toast-" + kind } role={ toastRole(kind) } data-toast={ kind }>
+		<div class="min-w-0 flex-1">
+			<p class="font-medium">{ text }</p>
+			if len(lines) > 0 {
+				<ul class="toast-lines">
+					for _, l := range lines {
+						<li>{ l }</li>
+					}
+				</ul>
+			}
+		</div>
+		<button type="button" class="btn btn-ghost btn-sm" data-dismiss aria-label="Dismiss">×</button>
+	</div>
+}
+
+// Table wraps a data table in its panel with horizontal scroll.
+templ Table(attrs templ.Attributes) {
+	<div class={ cls("table-wrap", attrs) } { rest(attrs)... }>
+		<table class="table">
+			{ children... }
+		</table>
+	</div>
+}
+
+// Pill is a rounded status pill (header pills, filter counts).
+templ Pill(kind string, attrs templ.Attributes) {
+	<span class={ cls("pill pill-"+kind, attrs) } { rest(attrs)... }>{ children... }</span>
+}
+
+// PillLink is a pill that links somewhere.
+templ PillLink(kind, href string, attrs templ.Attributes) {
+	<a href={ templ.SafeURL(href) } class={ cls("pill pill-"+kind+" no-underline", attrs) } { rest(attrs)... }>{ children... }</a>
+}
+
+// Code is a block of preformatted text (job logs, JSON, steps).
+templ Code(attrs templ.Attributes) {
+	<pre class={ cls("code num", attrs) } { rest(attrs)... }>{ children... }</pre>
+}

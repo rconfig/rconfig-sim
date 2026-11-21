@@ -70,25 +70,21 @@ func TestBuildVersion(t *testing.T) {
 	}
 }
 
-func TestLoopback(t *testing.T) {
-	for addr, want := range map[string]bool{
-		"127.0.0.1:9100": true, "[::1]:9100": true, "localhost:9100": true,
-		"0.0.0.0:9100": false, "10.50.0.1:9100": false, ":9100": false, "bad": false,
-	} {
-		if got := loopback(addr); got != want {
-			t.Errorf("%s: want %v, got %v", addr, want, got)
-		}
-	}
-}
-
 func TestCheckRemovedFlags(t *testing.T) {
-	for _, args := range [][]string{{"--admin-token=x"}, {"-admin-token", "x"}, {"--admin", "--admin-token", "y"}} {
-		err := checkRemovedFlags(args)
-		if err == nil || !strings.Contains(err.Error(), "--admin-token was removed") {
-			t.Errorf("%v: want a removed-flag error, got %v", args, err)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--admin-token=x"}, "--admin-token was removed"},
+		{[]string{"-admin-token", "x"}, "--admin-token was removed"},
+		{[]string{"--admin"}, "--admin was replaced by --admin-addr"},
+		{[]string{"--admin=true"}, "--admin was replaced by --admin-addr"},
+	} {
+		if err := checkRemovedFlags(c.args); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: want %q, got %v", c.args, c.want, err)
 		}
 	}
-	for _, args := range [][]string{nil, {"--admin"}, {"--metrics-addr", "127.0.0.1:9100"}, {"--", "--admin-token"}} {
+	for _, args := range [][]string{nil, {"--admin-addr", "127.0.0.1:9200"}, {"--metrics-addr", "127.0.0.1:9100"}, {"--", "--admin-token"}} {
 		if err := checkRemovedFlags(args); err != nil {
 			t.Errorf("%v: %v", args, err)
 		}

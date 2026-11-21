@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/fault"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/envfile"
@@ -158,8 +159,8 @@ func TestPollStatuses(t *testing.T) {
 		t.Errorf("down instance unit state: %q", v.Unit)
 	}
 	v, _ = f.View("127.0.0.3")
-	if !strings.Contains(v.Detail, "ADMIN=true") {
-		t.Errorf("admin-off card must say what to add: %q", v.Detail)
+	if !strings.Contains(v.Detail, "ADMIN_ADDR") {
+		t.Errorf("admin-off card must name ADMIN_ADDR: %q", v.Detail)
 	}
 	v, _ = f.View("127.0.0.1")
 	if v.State == nil || v.State.Generation != 1 || len(v.Drift) != 0 {
@@ -516,5 +517,114 @@ func TestApplyActiveIncludesDownInstances(t *testing.T) {
 	f.Poll(context.Background())
 	if max, active := f.ActiveDevicesTotal(); max != 10 || active != 5 {
 		t.Fatalf("totals after apply: max %d active %d", max, active)
+	}
+}
+
+// TestAdminAddr (section 7.2, D3): an empty ADMIN_ADDR is admin-off with
+// the line to add; a non-loopback one is a bad env file; admin ports count
+// in the clash check.
+func TestAdminAddr(t *testing.T) {
+	dir := t.TempDir()
+	in := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
+	b, _ := os.ReadFile(in.EnvPath)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.WriteFile(in.EnvPath, []byte(strings.ReplaceAll(string(b), "ADMIN_ADDR="+in.AdminAddr(), "ADMIN_ADDR=")), 0o660))
+	f := newFleet(t, dir, nil)
+	v, _ := f.View("127.0.0.1")
+	if v.Status != StatusAdminOff || !strings.Contains(v.Detail, "add ADMIN_ADDR=127.0.0.1:<port>") {
+		t.Fatalf("empty ADMIN_ADDR: %s %q", v.Status, v.Detail)
+	}
+
+	bad := t.TempDir()
+	writeEnv(t, bad, "10.0.0.1.env", "METRICS_ADDR=10.0.0.1:9100\nADMIN_ADDR=10.0.0.1:9200\n")
+	insts, _ := Discover(bad)
+	if insts[0].Err == nil || !strings.Contains(insts[0].Err.Error(), "ADMIN_ADDR") {
+		t.Fatalf("non-loopback ADMIN_ADDR must be a bad env file: %v", insts[0].Err)
+	}
+
+	clash := t.TempDir()
+	writeEnv(t, clash, "10.0.0.1.env", "METRICS_ADDR=10.0.0.1:9100\nADMIN_ADDR=127.0.0.1:9200\n")
+	writeEnv(t, clash, "10.0.0.2.env", "METRICS_ADDR=127.0.0.1:9200\nADMIN_ADDR=127.0.0.1:9201\n") // its metrics on .1's admin port
+	writeEnv(t, clash, "10.0.0.3.env", "METRICS_ADDR=10.0.0.3:9100\nADMIN_ADDR=127.0.0.1:9202\n")
+	writeEnv(t, clash, "10.0.0.4.env", "METRICS_ADDR=127.0.0.1:9300\nADMIN_ADDR=127.0.0.1:9300\n") // one port for both
+	insts, _ = Discover(clash)
+	got := map[string][]string{}
+	for _, in := range insts {
+		got[in.Name] = in.PortClash
+	}
+	if !slices.Equal(got["10.0.0.1"], []string{"10.0.0.2"}) || !slices.Equal(got["10.0.0.2"], []string{"10.0.0.1"}) ||
+		got["10.0.0.3"] != nil || !slices.Equal(got["10.0.0.4"], []string{"10.0.0.4"}) {
+		t.Fatalf("clashes: %v", got)
+	}
+}
+
+func TestApplyInstances(t *testing.T) {
+	dir := t.TempDir()
+	a := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
+	b := uitest.Start(t, dir, "127.0.0.2", uitest.Options{})
+	down := uitest.Start(t, dir, "127.0.0.3", uitest.Options{})
+	down.Down.Store(true)
+	f := newFleet(t, dir, fakeUnits{})
+
+	base := Desired{Faults: map[string]float64{"auth_fail": 0.1}, ProfileRules: []string{}, ProfileSeed: 7,
+		DelayMinMS: 10, DelayMaxMS: 20, MaxSessions: 9, ActiveDevices: 2}
+	over := base
+	over.Faults = map[string]float64{"disconnect_mid": 0.2}
+	res := f.ApplyInstances(context.Background(), map[string]Desired{"127.0.0.1": base, "127.0.0.3": over})
+	if len(res) != 2 {
+		t.Fatalf("results %+v, want 2 (127.0.0.2 not named)", res)
+	}
+	for _, r := range res {
+		if !r.OK() {
+			t.Fatalf("%s: %v %v", r.Instance, r.Err, r.EnvErr)
+		}
+	}
+	if l := a.Live(); l.Faults.Rates()["auth_fail"] != 0.1 || l.MaxSessions != 9 || l.ActiveDevices != 2 || l.ProfileSeed != 7 {
+		t.Fatalf("127.0.0.1 live: %+v", l)
+	}
+	if l := b.Live(); l.Faults.Rates()["auth_fail"] != 0 {
+		t.Fatal("127.0.0.2 was not named and must be untouched")
+	}
+	env, _ := os.ReadFile(down.EnvPath)
+	if !strings.Contains(string(env), "FAULT_RATES=disconnect_mid=0.2") || !strings.Contains(string(env), "MAX_CONCURRENT_SESSIONS=9") {
+		t.Fatalf("down instance env file:\n%s", env)
+	}
+	f.Poll(context.Background())
+	if v, _ := f.View("127.0.0.1"); len(v.Drift) != 0 {
+		t.Fatalf("drift after apply: %v", v.Drift)
+	}
+}
+
+func TestObserveSamples(t *testing.T) {
+	dir := t.TempDir()
+	a := uitest.Start(t, dir, "127.0.0.1", uitest.Options{})
+	f := New(Options{EnvDir: dir})
+	var got []Sample
+	f.Observe(func(s Sample) { got = append(got, s) })
+
+	a.Sessions.Store(10)
+	a.Bytes.Store(1000)
+	f.Poll(context.Background())
+	a.Sessions.Store(15)
+	a.Bytes.Store(1600)
+	time.Sleep(5 * time.Millisecond)
+	f.Poll(context.Background())
+	// Restart: counters reset, so the delta is the new value.
+	a.Sessions.Store(2)
+	a.Bytes.Store(100)
+	time.Sleep(5 * time.Millisecond)
+	f.Poll(context.Background())
+
+	if len(got) != 3 || len(got[0].Instances) != 0 {
+		t.Fatalf("samples %+v: want 3, the first with no deltas", got)
+	}
+	d1, d2 := got[1].Instances["127.0.0.1"].Delta, got[2].Instances["127.0.0.1"].Delta
+	if d1.Sessions["ok"] != 5 || d1.Bytes != 600 || d2.Sessions["ok"] != 2 || d2.Bytes != 100 {
+		t.Fatalf("deltas %+v then %+v", d1, d2)
 	}
 }

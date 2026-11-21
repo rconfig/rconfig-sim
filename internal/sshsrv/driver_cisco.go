@@ -1,6 +1,7 @@
 package sshsrv
 
 import "time"
+import "github.com/rcfg-sim/rcfg-sim/internal/drivers"
 
 func init() { registerDriver(ciscoIOS{}) }
 
@@ -15,7 +16,7 @@ type ciscoIOS struct{}
 func (ciscoIOS) Name() string { return "cisco_ios" }
 
 // RequiresSSHAuth: Cisco IOS authenticates at the SSH layer.
-func (ciscoIOS) RequiresSSHAuth() bool { return true }
+func (ciscoIOS) RequiresSSHAuth() bool { return drivers.RequiresSSHAuth("cisco_ios") }
 
 func (ciscoIOS) Commands() []string {
 	return []string{

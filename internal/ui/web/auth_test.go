@@ -42,7 +42,7 @@ func authEnv(t *testing.T, listen string, allowed []string) (*env, *syncBuffer) 
 	e := &env{t: t, dir: t.TempDir()}
 	e.fleet = fleet.New(fleet.Options{EnvDir: e.dir})
 	e.auth = testAuth(t)
-	e.srv = New(Options{Fleet: e.fleet, Presets: presets.NewStore(t.TempDir()), Auth: e.auth,
+	e.srv = New(Options{Fleet: e.fleet, Presets: presets.NewStore(t.TempDir()), Auth: e.auth, Catalogue: testCatalogue(t),
 		ListenAddr: listen, AllowedHosts: allowed, Logger: slog.New(slog.NewJSONHandler(logs, nil))})
 	e.http = httptest.NewServer(e.srv)
 	t.Cleanup(func() { e.srv.Close(); e.http.Close() })

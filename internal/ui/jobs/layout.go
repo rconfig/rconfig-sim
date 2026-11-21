@@ -32,6 +32,7 @@ type Layout struct {
 	Instances    []string // instance names, in IP order
 	EnvDir       string
 	metrics      []string // each instance's METRICS_ADDR, for the add-IPs steps
+	admins       []string // each instance's ADMIN_ADDR, likewise
 }
 
 // NotAdoptedError means the install has not been moved to the data/ layout,
@@ -75,6 +76,7 @@ func LayoutOf(insts []fleet.Instance, envDir string) (Layout, error) {
 		}
 		l.Instances = append(l.Instances, in.Name)
 		l.metrics = append(l.metrics, in.MetricsAddr)
+		l.admins = append(l.admins, in.AdminAddr)
 	}
 	l.IPCount = len(insts)
 
@@ -152,10 +154,14 @@ func (l Layout) addIPSteps(ipCount int) []string {
 	for i := 0; i < extra; i++ {
 		ip := addIP(next, i).String()
 		env := filepath.Join(l.EnvDir, ip+".env")
+		admin := ""
+		if a := l.adminFor(l.IPCount + i); a != "" {
+			admin = "; s|^ADMIN_ADDR=.*|ADMIN_ADDR=" + a + "|"
+		}
 		steps = append(steps,
 			fmt.Sprintf("sudo install -m 0660 -g rcfgsim-ui %s %s", tmpl, env),
-			fmt.Sprintf("sudo sed -i 's|^LISTEN_IP=.*|LISTEN_IP=%s|; s|^METRICS_ADDR=.*|METRICS_ADDR=%s|; s|^HOST_KEY=.*|HOST_KEY=/opt/rcfg-sim/host-keys/%s.key|' %s",
-				ip, l.metricsFor(l.IPCount+i, ip), ip, env),
+			fmt.Sprintf("sudo sed -i 's|^LISTEN_IP=.*|LISTEN_IP=%s|; s|^METRICS_ADDR=.*|METRICS_ADDR=%s|; s|^HOST_KEY=.*|HOST_KEY=/opt/rcfg-sim/host-keys/%s.key|%s' %s",
+				ip, l.metricsFor(l.IPCount+i, ip), ip, admin, env),
 			fmt.Sprintf("sudo systemctl enable rcfg-sim@%s   # enable only: it has no devices until the build", ip),
 		)
 	}
@@ -166,6 +172,9 @@ func (l Layout) addIPSteps(ipCount int) []string {
 // same port on its own IP when the existing instances listen on their own
 // IPs, otherwise the next port after the highest in use.
 func (l Layout) metricsFor(i int, ip string) string {
+	if len(l.metrics) == 0 {
+		return ip + ":9100"
+	}
 	host, port, err := net.SplitHostPort(l.metrics[0])
 	if err == nil && host == l.IPBase {
 		return net.JoinHostPort(ip, port)
@@ -182,6 +191,28 @@ func (l Layout) metricsFor(i int, ip string) string {
 		return ip + ":9100"
 	}
 	return net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(high+i-l.IPCount+1))
+}
+
+// adminFor suggests an ADMIN_ADDR for a new instance at index i: loopback,
+// the next port after the highest in use. Empty when the template
+// instance's admin API is off, so the copy's is off too.
+func (l Layout) adminFor(i int) string {
+	if len(l.admins) == 0 || l.admins[0] == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(l.admins[0])
+	if err != nil {
+		return ""
+	}
+	high := 0
+	for _, a := range l.admins {
+		if _, p, err := net.SplitHostPort(a); err == nil {
+			if n, err := strconv.Atoi(p); err == nil && n > high {
+				high = n
+			}
+		}
+	}
+	return net.JoinHostPort(host, strconv.Itoa(high+i-l.IPCount+1))
 }
 
 // WritableError means this process cannot write the data directory. The

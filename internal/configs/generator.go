@@ -67,6 +67,44 @@ type model struct {
 	template string // manifest "template" column = runtime driver id
 	tmplFile string // embedded template name to ExecuteTemplate
 	build    func(cfg Config, index int, m model) any
+
+	// Catalogue metadata (rcfg-sim-gen catalogue --json, D14): the family
+	// the model belongs to, a one-line description of what it emulates, the
+	// measured average config size, and the generator options that apply
+	// to it.
+	family      string
+	description string
+	avgBytes    int64
+	options     []ModelOption
+}
+
+// Families.
+const (
+	FamilyIP      = "ip"
+	FamilyOptical = "optical"
+)
+
+// families are the device families, in display order.
+var families = []Family{
+	{ID: FamilyIP, Name: "Enterprise IP", Description: "Cisco IOS routers and switches in nine size buckets, from access switches to stress-test cores."},
+	{ID: FamilyOptical, Name: "Optical transport (TL1)", Description: "TL1 network elements over SSH: Ciena 6500, Infinera DTN-X and Cisco ONS 15454, with gateway and remote nodes."},
+}
+
+// ciscoBuckets is each Cisco size bucket's catalogue line: its class and
+// contents (README size table) and the measured average size at seed 42.
+var ciscoBuckets = map[string]struct {
+	desc string
+	avg  int64
+}{
+	"sm":  {"Access switch: 24 to 48 interfaces, basic VLANs, SNMP, no routing.", 25_600},
+	"md":  {"Aggregation or small router: 48 interfaces, OSPF, small ACLs, logging.", 192_500},
+	"lg":  {"Core router: multi-area OSPF, BGP (10 neighbours), large ACLs, QoS, crypto maps.", 940_000},
+	"xl":  {"DC core or firewall: massive ACLs, VRFs, extensive BGP, prefix-lists, route-maps.", 3_180_000},
+	"2xl": {"Stress, hyperscale edge: 256 interfaces, 100 ACLs, 6K static routes, 30 BGP, 50 VRFs.", 6_200_000},
+	"3xl": {"Stress, regional spine: 384 interfaces, 160 ACLs, 12K static routes, 40 BGP, 70 VRFs.", 12_700_000},
+	"4xl": {"Stress, SP core: 512 interfaces, 240 ACLs, 24K static routes, 60 BGP, 100 VRFs.", 24_700_000},
+	"5xl": {"Stress, pathological: 768 interfaces, 380 ACLs, 48K static routes, 100 BGP, 150 VRFs.", 52_100_000},
+	"6xl": {"Stress, max: 1024 interfaces, 600 ACLs, 96K static routes, 160 BGP, 220 VRFs.", 106_700_000},
 }
 
 // registry maps a model name to its model. The Cisco size buckets are derived
@@ -88,6 +126,9 @@ var registry = func() map[string]model {
 			build: func(cfg Config, index int, m model) any {
 				return buildDeviceData(cfg, index, m.name)
 			},
+			family:      FamilyIP,
+			description: ciscoBuckets[name].desc,
+			avgBytes:    ciscoBuckets[name].avg,
 		}
 	}
 	r[cienaModelName] = cienaModel()
@@ -241,15 +282,19 @@ var profiles = map[string]profile{
 
 // Config drives a generator run. Every field is user-set via the CLI.
 type Config struct {
-	Count          int
-	OutputDir      string
-	ManifestPath   string
-	IPBase         string
-	IPCount        int
-	PortStart      int
-	DevicesPerIP   int
-	Seed           int64
-	Distribution   string
+	Count        int
+	OutputDir    string
+	ManifestPath string
+	IPBase       string
+	IPCount      int
+	PortStart    int
+	DevicesPerIP int
+	Seed         int64
+	Distribution string
+	// Counts, when set, gives the exact number of devices per model
+	// ("sm:6000,ciena-6500-tl1-gne:2000") instead of Distribution's
+	// percentages. Count must then be 0 or the sum.
+	Counts         string
 	Username       string
 	Password       string
 	EnablePassword string
@@ -269,6 +314,9 @@ type Summary struct {
 	TotalBytes int64
 	PerBucket  map[string]bucketStats
 	Weights    map[string]int
+	// ExactCounts: the run used Counts, so targets are counts, not
+	// percentages.
+	ExactCounts bool
 }
 
 type bucketStats struct {
@@ -281,6 +329,18 @@ func (s Summary) String() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "generator summary: count=%d elapsed=%s total_bytes=%d (%.2f MB)\n",
 		s.Count, s.Elapsed.Round(time.Millisecond), s.TotalBytes, float64(s.TotalBytes)/(1024*1024))
+	if s.ExactCounts {
+		fmt.Fprintln(&sb, "per-model counts:")
+		for _, b := range modelOrder {
+			bs := s.PerBucket[b]
+			if bs.Target == 0 && bs.Realised == 0 {
+				continue
+			}
+			fmt.Fprintf(&sb, "  %-18s target=%6d count=%6d bytes=%d (avg %d)\n",
+				b, bs.Target, bs.Realised, bs.Bytes, avgOr0(bs.Bytes, bs.Realised))
+		}
+		return sb.String()
+	}
 	fmt.Fprintln(&sb, "per-bucket distribution:")
 	for _, b := range modelOrder {
 		bs := s.PerBucket[b]
@@ -358,6 +418,45 @@ func parseDistribution(s string) (map[string]int, error) {
 	return weights, nil
 }
 
+// ParseCounts validates a --counts string and returns each model's device
+// count (every model present, 0 when not listed) and their total.
+func ParseCounts(s string) (map[string]int, int, error) {
+	counts := map[string]int{}
+	total := 0
+	for _, tok := range strings.Split(s, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		name, num, ok := strings.Cut(tok, ":")
+		if !ok {
+			return nil, 0, fmt.Errorf("counts token %q: want model:count", tok)
+		}
+		name = strings.TrimSpace(name)
+		if _, ok := registry[name]; !ok {
+			return nil, 0, fmt.Errorf("unknown model %q (valid: %s)", name, strings.Join(modelOrder, ", "))
+		}
+		if _, dup := counts[name]; dup {
+			return nil, 0, fmt.Errorf("counts: model %q listed twice", name)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(num))
+		if err != nil || n < 0 {
+			return nil, 0, fmt.Errorf("counts token %q: count must be a whole number >= 0", tok)
+		}
+		counts[name] = n
+		total += n
+	}
+	if total == 0 {
+		return nil, 0, fmt.Errorf("counts: at least one model needs devices")
+	}
+	for _, b := range modelOrder {
+		if _, ok := counts[b]; !ok {
+			counts[b] = 0
+		}
+	}
+	return counts, total, nil
+}
+
 // stratifiedCounts allocates exact per-bucket counts, distributing rounding remainder
 // to the largest-weighted bucket. Guarantees sum == total.
 func stratifiedCounts(total int, weights map[string]int) map[string]int {
@@ -417,14 +516,28 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 			cfg.Count, cfg.IPCount*cfg.DevicesPerIP, cfg.IPCount, cfg.DevicesPerIP)
 	}
 
-	weights, err := parseDistribution(cfg.Distribution)
-	if err != nil {
-		return Summary{}, err
+	var weights, counts map[string]int
+	if cfg.Counts != "" {
+		// Exact counts: the same assignment path as --distribution, given
+		// the counts directly, so equal counts give identical output.
+		c, total, err := ParseCounts(cfg.Counts)
+		if err != nil {
+			return Summary{}, err
+		}
+		if cfg.Count != total {
+			return Summary{}, fmt.Errorf("--counts adds up to %d devices but --count is %d; leave --count out with --counts", total, cfg.Count)
+		}
+		counts, weights = c, map[string]int{}
+	} else {
+		var err error
+		if weights, err = parseDistribution(cfg.Distribution); err != nil {
+			return Summary{}, err
+		}
+		counts = stratifiedCounts(cfg.Count, weights)
 	}
 
 	start := time.Now()
 
-	counts := stratifiedCounts(cfg.Count, weights)
 	mainRng := rand.New(rand.NewSource(cfg.Seed))
 	assignments := buildAssignments(counts, mainRng)
 
@@ -524,9 +637,10 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 	}
 
 	summary := Summary{
-		Count:     cfg.Count,
-		PerBucket: map[string]bucketStats{},
-		Weights:   weights,
+		Count:       cfg.Count,
+		PerBucket:   map[string]bucketStats{},
+		Weights:     weights,
+		ExactCounts: cfg.Counts != "",
 	}
 	for _, b := range modelOrder {
 		summary.PerBucket[b] = bucketStats{Target: counts[b]}
@@ -558,6 +672,9 @@ func Run(cfg Config, stdout io.Writer) (Summary, error) {
 
 	// Verify distribution within ±1 percentage point (tolerance widened from ±1 integer
 	// to ±1 percentage point, since below ~100 devices any rounding blows the stricter bound).
+	if summary.ExactCounts {
+		return summary, nil
+	}
 	var offenders []string
 	for _, b := range modelOrder {
 		bs := summary.PerBucket[b]

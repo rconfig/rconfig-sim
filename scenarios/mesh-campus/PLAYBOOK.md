@@ -2,6 +2,8 @@
 
 How to stand up the mesh-campus scenario by hand and test rConfig Mesh against it. Follow the steps in order. Each step ends with a check.
 
+With the web UI (`rcfg-sim-ui`) you can skip steps 1 to 4: start the shipped testbench *Topology: mesh campus* from the Testbenches screen. It serves the three devices on the first instance's IP from its `PORT_START` (see the Devices screen for the addresses), answers the command files and accepts any password; the other instances show as *Not used by this testbench*. Then carry on at step 5 with those addresses instead of 10.1.1.2:12700 to 12702. The by-hand steps below still work without the UI.
+
 ## What you get
 
 | Device | OS | Sim address | rConfig device_model |
@@ -25,11 +27,11 @@ make build
 
 ## 2. Put the scenario in place
 
-The scenario lives at `scenarios/mesh-campus/` with `manifest.csv`, `configs/`, `commands/`, `README.md` and this playbook.
+The scenario lives at `scenarios/mesh-campus/` with `scenario.json` (for the web UI's scenario library), `manifest.csv`, `configs/`, `commands/`, `README.md` and this playbook.
 
 **Check:** `ls scenarios/mesh-campus/commands` shows `access-01  core-01  dist-01`.
 
-The manifest `ip` column must be `10.1.1.2` and `config_file` paths must be absolute.
+The manifest `ip` column must be `10.1.1.2`. The `config_file` paths are relative to the manifest (`configs/core-01.cfg`), so the scenario works wherever the folder is and whatever directory you start the sim from.
 
 ## 3. Start the sim in tmux
 

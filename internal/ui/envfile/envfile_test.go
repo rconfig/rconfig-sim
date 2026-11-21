@@ -104,7 +104,7 @@ func TestUpdateIndentedAndDuplicateKeys(t *testing.T) {
 func TestUpdateRefusesUnownedKeys(t *testing.T) {
 	p := write(t, sample, 0o660)
 	before, _ := os.ReadFile(p)
-	for _, k := range []string{"PASSWORD", "ADMIN", "ADMIN_TOKEN", "LISTEN_IP", FaultRate} {
+	for _, k := range []string{"USERNAME", "MANIFEST", "ADMIN_ADDR", "LISTEN_IP", FaultRate} {
 		if err := Update(p, map[string]string{k: "x"}); !errors.Is(err, ErrNotOwned) {
 			t.Errorf("%s: want ErrNotOwned, got %v", k, err)
 		}
@@ -112,6 +112,23 @@ func TestUpdateRefusesUnownedKeys(t *testing.T) {
 	after, _ := os.ReadFile(p)
 	if string(before) != string(after) {
 		t.Fatal("a refused update changed the file")
+	}
+}
+
+// TestRestore: a saved value is set back, a key saved as unset is removed
+// (every assignment of it), other lines stay, and unowned keys are refused.
+func TestRestore(t *testing.T) {
+	p := write(t, "# keep\nPASSWORD=\nCOMMANDS_ROOT=/x\nLISTEN_IP=1.2.3.4\nCOMMANDS_ROOT=/y\n", 0o660)
+	pw := "hand set"
+	if err := Restore(p, map[string]*string{Password: &pw, CommandsRoot: nil, EnablePassword: nil}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(p)
+	if string(got) != "# keep\nPASSWORD=\"hand set\"\nLISTEN_IP=1.2.3.4\n" {
+		t.Fatalf("got:\n%s", got)
+	}
+	if err := Restore(p, map[string]*string{"LISTEN_IP": nil}); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("unowned key: %v", err)
 	}
 }
 

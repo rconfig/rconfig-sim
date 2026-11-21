@@ -1,0 +1,158 @@
+package views
+
+import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
+
+// ScenariosPage is the scenario library (10.8): a choice card per package,
+// the chosen one's detail, and the packages that cannot be used.
+templ ScenariosPage(p Page, m ScenariosModel) {
+	@Layout(p) {
+		<div class="flex flex-wrap items-baseline justify-between gap-4">
+			<h1 class="text-2xl">Scenarios</h1>
+		</div>
+		<p class="mt-2 text-muted">Curated device packages with matching neighbours across vendors. Pick one to see its topology and devices, then create a testbench from it.</p>
+		if m.Err != "" {
+			<div class="mt-4">
+				@ui.Toast(ui.ToastError, m.Err, nil)
+			</div>
+		}
+		if len(m.Cards) == 0 && m.Err == "" {
+			<div class="mt-6">
+				@ui.Empty("No scenarios", "Drop a package folder (scenario.json, manifest.csv, configs/, optional commands/) into "+orDash(m.Dir)+" and reload this page.") {
+					<span></span>
+				}
+			</div>
+		}
+		if len(m.Cards) > 0 {
+			<form method="get" action="/scenarios" hx-get="/scenarios" hx-trigger="change" hx-target="#scenario-detail" hx-select="#scenario-detail" hx-swap="outerHTML" hx-push-url="true" class="mt-6">
+				@ui.ChoiceCards("id", m.Selected, "Scenarios", m.Cards, nil)
+				<noscript>
+					<div class="mt-3">
+						@ui.Submit(ui.Secondary, nil) {
+							Show
+						}
+					</div>
+				</noscript>
+			</form>
+		}
+		<div id="scenario-detail" class="mt-6">
+			if m.Detail != nil {
+				@scenarioDetail(*m.Detail)
+			}
+		</div>
+		if len(m.Attention) > 0 {
+			<section aria-label="Needs attention" class="mt-8">
+				<h2 class="text-lg">Needs attention</h2>
+				<p class="text-muted">These packages failed validation and cannot be used until they are fixed.</p>
+				<div class="mt-3">
+					for _, a := range m.Attention {
+						@ui.Toast(ui.ToastError, scenarioProblemTitle(a), a.Problems)
+					}
+				</div>
+			</section>
+		}
+		<p class="mt-8 text-xs text-muted">Add a package by dropping its folder into <span class="num">{ orDash(m.Dir) }</span> (flag --scenarios-dir); a reload of this page is enough.</p>
+	}
+}
+
+templ scenarioDetail(d ScenarioDetail) {
+	@ui.Card(d.Name, d.Description) {
+		<div class="flex flex-wrap items-center gap-2">
+			@ui.Badge(ui.BadgeFamily, "Topology")
+			for _, b := range d.Badges {
+				@ui.Badge(b.Kind, b.Text)
+			}
+			@ui.Badge(ui.BadgeMuted, "v"+itoa(d.Version))
+			if d.Shipped {
+				@ui.Badge(ui.BadgeMuted, "Shipped")
+			} else {
+				@ui.Badge(ui.BadgeInfo, "Yours")
+			}
+		</div>
+		if len(d.Problems) > 0 {
+			<div class="mt-4">
+				@ui.Toast(ui.ToastError, "This package cannot be used:", d.Problems)
+			</div>
+		}
+		<h3 class="mt-5 font-medium">Topology</h3>
+		if len(d.Diagram.Nodes) == 0 {
+			<p class="text-muted">The package has no topology in scenario.json.</p>
+		} else {
+			@topology(d.Diagram)
+		}
+		<h3 class="mt-5 font-medium">Devices</h3>
+		@ui.Table(templ.Attributes{"class": "mt-2"}) {
+			<thead>
+				<tr>
+					<th>Hostname</th>
+					<th>Vendor</th>
+					<th>Driver</th>
+					<th>Model</th>
+					<th class="text-right">Tier</th>
+					<th>Command files</th>
+					<th>On this host</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, r := range d.Devices {
+					<tr id={ "dev-" + r.Hostname } class="target:bg-panel-2">
+						<td class="num">{ r.Hostname }</td>
+						<td>{ r.Vendor }</td>
+						<td class="num">{ r.Driver }</td>
+						<td class="num">{ r.Model }</td>
+						<td class="num text-right">{ r.Tier }</td>
+						<td>
+							if r.Commands {
+								yes
+							} else {
+								<span class="text-muted">no</span>
+							}
+						</td>
+						<td class="num">{ orDash(r.Slot) }</td>
+					</tr>
+				}
+			</tbody>
+		}
+		<dl class="mt-5 grid grid-cols-[10rem_1fr] gap-x-3 gap-y-1">
+			<dt class="text-muted">Login</dt><dd>{ d.Auth }</dd>
+			<dt class="text-muted">SSH login</dt><dd class="num">{ d.SSHAuth }</dd>
+			if len(d.Behaviour) > 0 {
+				<dt class="text-muted">Suggested behaviour</dt><dd>{ joinComma(d.Behaviour) }</dd>
+			}
+			<dt class="text-muted">This host</dt>
+			<dd class={ templ.KV("text-st-error", !d.Fits) }>{ d.Fit }</dd>
+		</dl>
+		if len(d.Problems) == 0 {
+			<div class="mt-5">
+				@ui.Actions("Opens a new testbench with this scenario's devices and suggested behaviour; nothing starts until you save and start it.") {
+					@ui.LinkButton(ui.Primary, "", "/testbenches/new?scenario="+d.ID, nil) {
+						Create testbench from this scenario
+					}
+				}
+			</div>
+		}
+	}
+}
+
+// topology is the server-drawn diagram: links first, then a focusable box
+// per node that links to its device row and shows its vendor and driver
+// on focus or hover.
+templ topology(g Diagram) {
+	<figure class="mt-2 overflow-x-auto">
+		<svg viewBox={ g.viewBox() } width={ itoa(g.W) } height={ itoa(g.H) } class="topology max-w-full" role="group" aria-label="Topology diagram">
+			<g class="stroke-muted" stroke-width="2">
+				for _, l := range g.Links {
+					<line x1={ itoa(l.X1) } y1={ itoa(l.Y1) } x2={ itoa(l.X2) } y2={ itoa(l.Y2) }><title>{ l.Label }</title></line>
+				}
+			</g>
+			for _, n := range g.Nodes {
+				<a href={ templ.SafeURL("#dev-" + n.ID) } class="topo-node" aria-label={ n.Label }>
+					<title>{ n.Label }</title>
+					<rect x={ itoa(n.X) } y={ itoa(n.Y) } width={ itoa(n.W) } height={ itoa(n.H) } rx="8"></rect>
+					<text x={ itoa(n.CX) } y={ itoa(n.CY + 5) } text-anchor="middle" class="topo-name">{ n.ID }</text>
+					<text x={ itoa(n.CX) } y={ itoa(n.Y + n.H + 16) } text-anchor="middle" class="topo-detail">{ n.Detail }</text>
+				</a>
+			}
+		</svg>
+		<figcaption class="field-hint">Tab to a device to see its vendor and driver; Enter jumps to its row.</figcaption>
+	</figure>
+}

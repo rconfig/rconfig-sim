@@ -8,7 +8,7 @@
 
 | | |
 |---|---|
-| **Status** | Phases 1 to 5 done (Phase 5 uncommitted). Phase 6 item 0 (login, writability) done; rest of Phase 6 unblocked. Open items in [section 17](#17-tracked-follow-ups) |
+| **Status** | Phases 1 to 9 and their follow-ups implemented (6 to 9 uncommitted), plus one small unit-default fix. Then section 17 (manual checks, simdocs, release) |
 | **Tracking** | [RCO-1901](https://linear.app/rconfig/issue/RCO-1901/simulator-web-control-ui-for-rconfig-sim-rcfg-sim-ui) |
 | **Branch** | `rco-1901-simulator-web-control-ui-for-rconfig-sim-rcfg-sim-ui` |
 | **Baseline** | Must contain `f55abe2` (device profiles, RCO-1693). Cut from `origin/dev` (`75ffb93`) or later |
@@ -72,6 +72,8 @@ A browser UI for a running simulator fleet that lets an operator:
 - **Observe activity**: live sessions, throughput, faults by type, a whole-fleet heatmap, and a sampled event tail.
 - **Run testbenches** (Phase 6): define a named test setup once, save it, start it, stop it, restart it, and keep a record of every run.
 - **Set up from a vanilla host** (Phase 6): one `sudo make setup`, then everything else in the UI.
+- **Choose device types clearly** (Phases 8 and 9): a guided way to build a testbench for enterprise IP, optical transport (TL1), a mixed service provider fleet, or a curated topology scenario, showing only the levers each one needs.
+- **See and export the inventory** (Phase 7): every device in the fleet or a testbench, active or inactive and why, exported as tool-agnostic CSV or JSON.
 
 Constraints:
 
@@ -126,6 +128,9 @@ Findings from reviewing `main` at `f55abe2`. These shape the design.
 | D9 | **Basic username and password login on the UI**, one user, credentials in the UI's env file (`UI_USERNAME`, `UI_PASSWORD_HASH`, bcrypt). The admin API has **no auth** and is bound to `127.0.0.1` by `make setup`; only the UI on the same host talks to it. The optional tokens built in Phases 2 and 3 are removed in Phase 6. | Maintainer decision: simple login now, nothing more. One credential to manage, never on a command line, never stored in plain text. |
 | D10 | All front-end assets (htmx, the htmx SSE extension, uPlot, fonts) are **vendored at pinned versions** and embedded with `go:embed`. | Air-gapped labs. Reproducible builds. |
 | D11 | "Service level" means **service control** (instances, capacity, delays). SLA-target mode is **dropped**. Phase 6 builds **Testbenches** instead. | Saved, repeatable test setups with run records cover the real need; holding a metric at a target does not. |
+| D12 | **One testbench model, two device sources.** A testbench's devices come from either a **generated fleet** (counts per generator model) or a **scenario** (a curated package). The behaviour half (faults, profiles, delays, overrides, duration) is the same for both. | Faults, runs, Devices and exports work unchanged whatever the source. No parallel testbench types to keep in step. |
+| D13 | **Device families are first-class.** Every generator model belongs to a family: `ip` (Cisco IOS size buckets) or `optical` (TL1). Optical has its own panel and options and never shares one with IP. Scenarios are a third, separate kind. A generated testbench may include both families (a service provider mix) because real operators run both; each family keeps its own panel. | Optical is a specific use case with its own vocabulary (GNE, RNE, ACT-USER) and must not clutter the IP flow, but a hard wall would block realistic ISP testbenches. |
+| D14 | **The catalogue comes from the binaries.** Families, models, their options and the drivers are read from `rcfg-sim-gen catalogue --json`, never hardcoded in the UI. Scenarios are read from scenario packages on disk. | A new generator model or a new scenario appears in the UI with no UI change. |
 
 ---
 
@@ -326,7 +331,7 @@ Instance card states, in order of precedence:
 
 ### 7.3 Env file handling
 
-- The controller **only rewrites keys it owns**: `FAULT_RATES`, `DEVICE_PROFILES`, `PROFILE_SEED`, `RESPONSE_DELAY_MS_MIN`, `RESPONSE_DELAY_MS_MAX`, `MAX_CONCURRENT_SESSIONS`, `ACTIVE_DEVICES`. Comments, ordering and every other line are preserved.
+- The controller **only rewrites keys it owns**: `FAULT_RATES`, `DEVICE_PROFILES`, `PROFILE_SEED`, `RESPONSE_DELAY_MS_MIN`, `RESPONSE_DELAY_MS_MAX`, `MAX_CONCURRENT_SESSIONS`, `ACTIVE_DEVICES`, `SSH_AUTH` (Phase 8), plus `COMMANDS_ROOT`, `PASSWORD` and `ENABLE_PASSWORD` while a scenario testbench is active (Phase 9). Comments, ordering and every other line are preserved.
 - When writing `FAULT_RATES`, it sets `FAULT_RATE=0` and `FAULT_TYPES=` (empty). `FAULT_RATE` cannot be empty because it must parse as a number. D5 makes a non-zero legacy rate alongside `FAULT_RATES` an error.
 - `make install` creates the `rcfgsim-ui` group (the setgid layout needs it). `make install-ui` creates the user.
 - Writes are atomic: temp file in the same directory, `fsync`, rename. The temp file takes the original file's mode and group before the rename.
@@ -379,13 +384,15 @@ The controller unit adds `/opt/rcfg-sim/data` to `ReadWritePaths=`. It never get
 **A build:**
 
 1. **Validate the layout.** The existing instances must be a layout the generator can reproduce: consecutive IPs, and the same `PORT_START`, `PORT_COUNT` and `MANIFEST` on every instance. Otherwise refuse with the reason.
-2. **Validate the count.** Every instance must get at least one device: `(ip_count - 1) x devices_per_ip < count <= ip_count x devices_per_ip`. The generator fills IPs in order, and an instance with no devices refuses to start. Shrinking the fleet is what the active-devices slider is for; the Build screen says so beside the count field. A count needing more IPs is refused with the exact `deploy/ip-aliases.sh` and env-file steps.
+2. **Validate the count.** For generated fleets, every instance must get at least one device (scenario builds instead leave instances unused, Phase 9 item 5): `(ip_count - 1) x devices_per_ip < count <= ip_count x devices_per_ip`. The generator fills IPs in order, and an instance with no devices refuses to start. Shrinking the fleet is what the active-devices slider is for; the Build screen says so beside the count field. A count needing more IPs is refused with the exact `deploy/ip-aliases.sh` and env-file steps.
 3. **Settings.** Start from the live build's `build.json`, so options the UI does not expose (for example `--rne-dual-home-pct`) carry over. Credentials (username, password, enable password) are reused from the first row of the live manifest. An adopted build's `build.json` holds only the device count; everything else uses generator defaults, and the Build screen says so.
 4. **Estimate** disk and RAM from per-model average sizes, checked against real generator output. RAM is the total config size (page cache). Generation time uses measured constants (about 12 MB/s plus 0.2 ms per file); restart time shows the pauses between instances only. Refuse if free space is below the estimate plus 10%.
 5. **Generate** into `builds/<timestamp>/`. A failed run deletes that directory and leaves `current` alone.
 6. **Swap** `current` atomically (create a temp symlink, then rename it over `current`).
 7. **Rolling restart** (7.4). If it stops on a failure, the job offers rollback.
 8. **Retention.** Keep the live build and the one before it. Delete older builds only after a successful build and restart. The disk check in step 4 assumes two builds on disk. *Phase 6 changes this to `--keep-builds` (default 3, least recently used first) so testbenches can switch builds without regenerating.*
+
+**Exact counts (Phase 8).** Builds always run with `--counts`; `build.json` records `counts`, and `settings_hash` hashes them, so builds kept from before Phase 8 are regenerated once.
 
 **Rollback** points `current` at the build named in the live `build.json`'s `previous` field and does a rolling restart. An adopted build has no `previous`, so it cannot be rolled back. There is no roll-forward: the generator is deterministic, so rebuilding with the same `build.json` settings and seed reproduces a build exactly.
 
@@ -483,11 +490,39 @@ Colour is never the only signal. The heatmap legend shows counts per state, hove
 
 Engineering tool, not marketing page. Dense but calm: cards with 1px borders, 8px radius, no heavy shadows, generous use of tabular numbers. Motion only where it carries meaning (a live counter ticking, a sparkline moving). Respect `prefers-reduced-motion`.
 
+### 9.6 Components and interaction rules (Phase 8)
+
+One small component set in `internal/ui/web/views/components/`, used by every screen. No screen styles its own buttons, cards or inputs.
+
+| Component | Use |
+|---|---|
+| Button | Primary (copper fill, one per view), secondary (outline), danger (rose, always asks to confirm), ghost (icon or text only). Loading state with spinner; disabled state explains why on hover |
+| Choice card | A large selectable card: icon, title, one-line description, badges. Used for "what are you testing" and scenario picking. Whole card is the click target; keyboard selectable |
+| Segmented control | 2 to 4 mutually exclusive options shown together (for example SSH login mode) |
+| Stepper | Numbered steps across the top of a guided flow; completed steps are clickable |
+| Slider with input | Every slider has a numeric input beside it; both edit the same value; units shown |
+| Count row | One row per model: name, protocol badge, average size, count input with +/- and a share bar |
+| Badge | Family (IP, Optical, Topology), protocol (CLI, TL1), "restart needed", "read-only", "doesn't fit this host" |
+| Summary sentence | One plain sentence describing what will happen, above every primary action ("Builds 20,000 devices on 8 instances, about 6 minutes, then starts") |
+| Inline help | A `?` beside a label opens a short explanation in place. No help text longer than three sentences |
+| Advanced disclosure | Rarely used options are folded under "Advanced", closed by default, with a count of non-default values shown on the fold |
+| Empty state | Every list explains what it is and offers the next action when empty |
+| Toast | Confirms a finished action in one line; errors stay until dismissed |
+
+Rules:
+
+- **Show only the levers that apply.** A field that does not apply to the current choice is not shown, not disabled.
+- **One primary action per view**, always bottom right of the form, always with a summary sentence above it.
+- **Plain words first, flags second.** Labels describe the effect ("Ask for an SSH password before TL1 login"); the flag name appears only in inline help.
+- **Settings that need a restart** carry a "restart needed" badge, and the summary sentence says the restart will happen.
+- **Every screen works by keyboard**: visible focus, tab order matches reading order, Escape closes drawers and dialogs, Enter submits the primary action.
+- **Numbers line up**: tabular figures, thousands separators, units in headers.
+
 ---
 
 ## 10. Screens
 
-Navigation: a left rail with **Fleet**, **Failures**, **Activity**, **Build**, and a header with the logo, a fleet health pill (instances up / total), the theme toggle, and a global "pending changes" bar that appears whenever a form differs from live state.
+Navigation: a left rail with **Fleet**, **Testbenches**, **Runs**, **Devices**, **Failures**, **Activity**, **Build** (and **Scenarios** from Phase 9), and a header with the logo, the active testbench pill, device search, a fleet health pill (instances up / total), the theme toggle, log out, and a global "pending changes" bar that appears whenever a form differs from live state.
 
 ### 10.1 Fleet (service control)
 
@@ -528,11 +563,20 @@ Values are starting points; tune them in review.
 
 ---
 
-### 10.5 Testbenches (Phase 6)
+### 10.5 Testbenches (Phase 6, reworked in Phases 8 and 9)
 
-- **List**: name, description, devices, last run, and whether it fits this host (enough instances and IPs). Shipped testbenches are marked read-only; "Duplicate" makes an editable copy.
-- **Editor**, one form with sections: Build (count, distribution, seed), Faults and profiles (can load a preset), Behaviour (delays, session cap, active devices), Per-instance overrides (pick an instance, override any runtime value), Duration (optional auto-stop). "Save" bumps the version; "Save as" makes a new testbench.
-- **Active testbench pill** in the header on every screen: name, state (idle, starting, running, stopping, failed), elapsed time, and Stop and Restart buttons. While a testbench runs, changes made on Fleet or Failures mark the pill "modified" and offer "Save to testbench".
+- **List**: grouped by kind (Enterprise IP, Optical transport, Service provider mix, Topology scenarios), shipped and user testbenches together in each group, each row with a family badge, a **Shipped** or **Yours** badge, devices, last run, and whether it fits this host. A filter toggles shipped and yours. Shipped testbenches are read-only; "Duplicate" makes an editable copy. A testbench that fits no kind, or fails validation, goes in an **Needs attention** group with the reason.
+- **New testbench** is a guided flow with a stepper:
+  1. **What are you testing?** Choice cards: *Enterprise IP fleet*, *Optical transport (TL1)*, *Service provider mix (IP and optical)*, *Topology scenario*, or *Start from a shipped testbench*.
+  2. **Devices.** Depends on step 1, and shows nothing else:
+     - *IP*: a count row per IP model (Cisco size buckets), a total, presets ("Typical enterprise 40/40/15/5", "Heavy configs"), and the estimate.
+     - *Optical*: a count row per optical model with a one-line description of what each emulates (for example "Gateway NE fronting 2 to 5 remote NEs"), the **SSH login** segmented control, and optical options from the catalogue (for example dual-homed RNEs, with a small diagram showing what it means).
+     - *Service provider mix*: the IP panel and the optical panel one after the other, each with its own subtotal, and one fleet total.
+     - *Topology scenario*: scenario choice cards (section 10.8).
+  3. **Behaviour.** Faults and profiles (load a preset), delays, session cap, active devices, per-instance overrides, duration. The same for every kind.
+  4. **Review and start.** The summary sentence, the device mix as a stacked bar, the estimate, what will happen (reuse a kept build or generate, restarts needed, instances left unused), then **Save**, **Save and start**.
+- **Editing** an existing testbench opens the same steps with the kind fixed; changing kind means "Duplicate as".
+- **Active testbench pill** in the header on every screen: name, state, elapsed time, Stop and Restart. Clicking the name opens the running run; a devices icon opens its Devices view. While a testbench runs, changes made on Fleet or Failures mark the pill "modified" and offer "Save to testbench".
 - **Import and export**: JSON download and upload.
 
 ### 10.6 Runs (Phase 6)
@@ -541,6 +585,21 @@ Values are starting points; tune them in review.
 - **Run detail**: the testbench snapshot it ran with, the event timeline (start, build, restarts, setting changes, instance failures, stop), and totals by outcome, by fault type and by instance.
 - **Compare**: pick two runs; a side-by-side table of totals and the settings that differ.
 - **Export** as JSON or CSV.
+
+### 10.7 Devices (Phase 7)
+
+- **Table** of every device in the live build: hostname, instance IP, port, model, credentials (username shown, passwords behind a reveal), profile, **status** (active or inactive) with its **reason**, last outcome, last seen. Server-side paging, sorting and search, so 50,000 rows stay fast.
+- **Summary bar** above the table: total, active, inactive by reason, and counts by model. Each count is a one-click filter.
+- **Filters**: status, reason, instance, model, profile, last outcome, and free-text search on hostname or IP. Filters live in the URL, so a filtered view can be bookmarked or shared.
+- **Device drawer** (the Activity side panel, reused): everything in the row, the `ssh` command with a copy button, recent events, and a **Test login** button.
+- **Export** of exactly what the current filters show (section Phase 7, item 4).
+- **Where it appears**: a Devices item in the nav (the live build); a Devices tab on a testbench (the build that testbench uses, if kept); a Devices tab on a run (the build it ran on, if still kept). The header search box finds any hostname and opens its drawer.
+
+### 10.8 Scenario library (Phase 9)
+
+- **Choice cards**, one per scenario: name, one-line purpose, device count, vendors and drivers as badges, what it demonstrates (for example "LLDP and CDP neighbours across EOS, Junos and IOS"), and whether it fits this host.
+- **Detail view**: the description, a **topology diagram** drawn from the scenario's `topology` (nodes and links, laid out in tiers), the device table, the suggested behaviour settings, and "Create testbench from this scenario".
+- **Where scenarios come from**: shipped in the repo (`scenarios/`, mesh-campus only) and added by dropping a package folder into `--scenarios-dir` (readable by `rcfgsim-ui`). Folders without `scenario.json` are skipped. A package with an invalid `scenario.json` goes in a **Needs attention** list with the reason and cannot be used. With `auth.mode` `manifest`, every row must share one password and one enable password, because an instance accepts only one of each.
 
 ## 11. Repository layout and build
 
@@ -564,6 +623,11 @@ internal/ui/jobs/                    build and rolling-restart jobs
 internal/ui/presets/                 preset storage
 internal/ui/testbench/               testbench model, storage, validation, shipped testbenches (Phase 6)
 internal/ui/runs/                    run records and totals (Phase 6)
+internal/ui/inventory/               manifest index, device status, exports, test login (Phase 7)
+internal/ui/catalogue/               reads `rcfg-sim-gen catalogue --json` (Phase 8)
+internal/drivers/                    dependency-free driver metadata shared by configs and sshsrv (Phase 8)
+internal/ui/scenarios/               scenario package loading, validation, install as a build (Phase 9)
+internal/ui/web/views/components/    the component set in 9.6 (Phase 8)
 deploy/setup.sh                      one-step host setup behind `make setup` (Phase 6)
 deploy/systemd/rcfg-sim-ui.service   new unit
 deploy/polkit/50-rcfg-sim-ui.rules   new polkit rule
@@ -651,11 +715,24 @@ Everything below becomes public API under [CLAUDE.md](../CLAUDE.md) and needs RE
 | Testbench and run formats | `--data-dir/testbenches/*.json`, `--data-dir/runs/*.json`, `active.json` | n/a | 6 |
 | `rcfg-sim-ui` flags | `--ui-allowed-hosts`, `--keep-builds`, `--keep-runs` | empty, 3, 200 | 6 |
 | Makefile and script | `make setup`, `deploy/setup.sh` (`IPS`, `BASE_IP`, `DEVICES_PER_IP`, `PORT_START`, `DEVICES`, `--dry-run`, `--force`) | n/a | 6 |
+| UI routes | `/devices`, `/devices/find`, `/devices/export`, `/device/{hostname}` (singular, so a hostname can never clash with a route), `/device/{hostname}/test-login`, `/testbenches/{slug}/keep-build`, `/runs/{id}/export?format=json\|csv`, `/runs/{id}/notes`, `/checklist`; HTTP Basic accepted on the export routes only | n/a | 7 |
+| Export format | Tool-agnostic CSV and JSON, columns `hostname`, `ip`, `port`, `username`, `password`, `enable_password`, `model`, `status`, `status_reason` | n/a | 7 |
+| Run record | `notes`, `tags`, `build`, `manifest_sha256` fields | n/a | 7 |
+| `rcfg-sim-gen` | `catalogue --json` subcommand; `--counts` (exact devices per model, alternative to `--distribution`) | n/a | 8 |
+| Testbench format | `devices` section with `source` (`generated` or `scenario`), per-family model counts, `ssh_auth`, model options; replaces `build` (old files migrated on load) | n/a | 8, 9 |
+| Controller-owned env keys | `SSH_AUTH`, and for scenario testbenches `COMMANDS_ROOT`, `PASSWORD`, `ENABLE_PASSWORD` | n/a | 8, 9 |
+| Scenario package | `scenario.json` schema; manifest `config_file` paths relative to the manifest | n/a | 9 |
+| `rcfg-sim-ui` flag | `--scenarios-dir` (env `SCENARIOS_DIR`) | `/var/lib/rcfg-sim-ui/scenarios` | 9 |
+| `rcfg-sim` flag | `--allow-empty` (env `ALLOW_EMPTY`) | `false` | 9 follow-up |
+| Behaviour (**Breaking**) | A relative manifest `config_file` resolves against the manifest's directory, not the working directory | n/a | 9 |
+| UI | Routes `/scenarios`, `/scenarios/{id}`, `/testbenches/new?scenario=`, `/testbenches?show=shipped\|yours`; Build form fields `count_<model>`; card state and Devices reason "Not used by this testbench"; `build.json` `scenario` field; scenario build names `<id>-v<version>-<hash12>` | n/a | 9 |
 | **Breaking** | All token flags and env vars removed from both binaries (D9) | n/a | 6 |
 | **Breaking** | UI login required: `UI_USERNAME`, `UI_PASSWORD_HASH` in the UI env file; `rcfg-sim-ui hash-password` subcommand; UI refuses to start without them | n/a | 6 |
 | **Breaking** | Unit `HOST_KEY` default moves to `/opt/rcfg-sim/host-keys/%i.key`; `/etc/rcfg-sim` becomes `root:rcfgsim-ui 2770` and is no longer writable by `rcfgsim` | n/a | 3 |
 
 No existing flag, metric name or label changes. No new Prometheus labels; the device state and events are exposed via the admin API, not `/metrics`, to keep cardinality bounded.
+
+**CHANGELOG rule:** Breaking means breaking relative to the **last release**, not the last commit. Changes to things never released (tokens, `--admin`, the UI itself) go under Added or Changed and are rewritten in place. Changes to released behaviour (the host-key default, `/etc/rcfg-sim` permissions) stay under Breaking with Migration until released.
 
 Phases 1 and 2 are additive. Phase 3 has a breaking change (the host-key default and `/etc/rcfg-sim` permissions), recorded under `### Breaking` with a `#### Migration` snippet, which pre-1.0 allows in a patch or minor bump. Phase 3 also moves `golang.org/x/sys` from v0.38 to v0.48 (pulled in by templ); `rcfg-sim` links it, so note it in the CHANGELOG.
 
@@ -807,7 +884,7 @@ Then section 7.5 in full: the `data/` layout and symlink swap, `make adopt-data`
 
 ---
 
-### Phase 6: Testbenches, no auth, one-step setup
+### Phase 6: Testbenches, basic login, one-step setup
 
 **Goal.** From a vanilla host: one `sudo make setup`, then in the UI define a testbench, save it, start it, stop it, restart it, switch between testbenches, and keep a record of every run. Replace the optional tokens with a basic login (D9).
 
@@ -853,20 +930,20 @@ Then section 7.5 in full: the `data/` layout and symlink swap, `make adopt-data`
    - **Shipped testbenches**, embedded and read-only, from TEST-SCENARIOS.md scenarios 3 to 9, scaled to the scenario's device count. Scenario 8 uses an override. Scenarios 1 and 2 are foreground dev runs and are not shipped.
    - Presets stay. The testbench editor can load a preset into its faults and profiles.
 
-2. **Builds kept by settings.** Each build's `build.json` gains `settings_hash`, a hash of the normalised build settings (devices, distribution, seed, options, IP layout). Starting a testbench reuses a kept build with the same hash instead of generating. Retention becomes `--keep-builds` (default 3), least recently used first; the live build is never deleted. The disk check in 7.5 assumes `--keep-builds` builds on disk. Rollback (7.5) still works.
+2. **Builds kept by settings.** Each build's `build.json` gains `settings_hash`, a hash of the normalised build settings (devices, distribution, seed, options, IP layout). Starting a testbench reuses a kept build with the same hash instead of generating. Retention becomes `--keep-builds` (default 3), least recently used first; the live build is never deleted. The disk check in 7.5 stays "the new build fits in free space": existing builds already occupy disk, and retention runs only after a successful build, so up to `--keep-builds` + 1 builds exist while one generates. Rollback (7.5) still works.
 
 3. **Lifecycle** (`internal/ui/testbench`, with the jobs runner). At most one active testbench. State is persisted in `--data-dir/active.json`, so a UI restart resumes it (including the auto-stop timer).
    - **Start**: plan, then (a) switch to or build the matching build, (b) apply runtime values and overrides through the fan-out in 5.4, writing env files, (c) start every instance that is down, rolling-restart the rest if the build changed, (d) wait until every instance is up, its live settings (`/admin/v1/state`) match the testbench's values for that instance (fleet values plus overrides), and it shows no drift against its env file; then mark the run as running. Give up after `--start-timeout` (default 120 s, plus the rolling-restart time when the build changed) and mark the run failed with the instances that did not match. Any failure marks the run failed, records why, and leaves instances as they are (no automatic rollback).
    - **Stop**: stop all instances, close the run. Starting a different testbench while one runs asks first, then stops it before starting the new one.
-   - **Restart**: rolling restart with the same testbench; recorded as an event in the same run.
+   - **Restart**: rolling restart with the same testbench; recorded as an event in the same run. Afterwards it waits for every instance to be up with no drift against its env file (the env files hold any changes made during the run), with the same timeout; it does not compare against the saved testbench.
    - **Changes during a run** from Fleet or Failures are allowed: recorded as run events, and the active testbench is marked modified until saved or reverted.
    - Lifecycle actions share the one-job-at-a-time rule with builds and rolling restarts (7.5).
 
-4. **Runs** (`internal/ui/runs`). One JSON file per run in `--data-dir/runs/`: a full snapshot of the testbench as started, start and end times, how it ended, the event timeline, and totals. Totals come from the counter scraping in Phase 4: sessions by outcome, faults by type, bytes, peak active sessions, overall and per instance, taken as deltas from start to end and handling counter resets on restart. Keep the last 200 runs by default (`--keep-runs`).
+4. **Runs** (`internal/ui/runs`). One JSON file per run in `--data-dir/runs/`: a full snapshot of the testbench as started, start and end times, how it ended, the event timeline, and totals. Totals come from the counter scraping in Phase 4: sessions by outcome, faults by type, bytes, peak active sessions, overall and per instance, taken as deltas from start to end and handling counter resets on restart. Keep the last 200 runs by default (`--keep-runs`). Totals are the sum of per-poll deltas, which handles instance restarts. Traffic while the UI itself is down is not counted: the run records a `ui_gap` event with its start and end, and the run detail marks the totals as incomplete.
 
 5. **Screens**: Testbenches (10.5) and Runs (10.6), the header pill, and the "Save to testbench" prompt.
 
-6. **One-step setup** (`deploy/setup.sh`, `make setup`). Run once with sudo on a vanilla host. Takes `IPS`, `BASE_IP`, `DEVICES_PER_IP`, `PORT_START` and an optional `DEVICES` for the first build. It does what the README full deployment does today, in order: sysctl and limits, the `rcfgsim` and `rcfgsim-ui` users, `make install` and `make install-ui`, persistent IP aliases, one env file per IP (`ADMIN_ADDR=127.0.0.1:<19100+n>`, `METRICS_ADDR=127.0.0.1:<9100+n>`, `MANIFEST` pointing at `data/current`), a small first build straight into the `data/` layout (no adoption needed), then enables and starts all units and the UI. It sets the UI login: `UI_USER` and `UI_PASSWORD` if given, otherwise username `admin` and a random 20-character password, stored only as a hash and printed once at the end with the SSH tunnel command.
+6. **One-step setup** (`deploy/setup.sh`, `make setup`). Run once with sudo on a vanilla host. Takes `IPS`, `BASE_IP`, `DEVICES_PER_IP`, `PORT_START` and an optional `DEVICES` for the first build. It does what the README full deployment does today, in order: sysctl and limits, the `rcfgsim` and `rcfgsim-ui` users, `make install` and `make install-ui`, persistent IP aliases, one env file per IP (`ADMIN_ADDR=127.0.0.1:<19100+n>`, `METRICS_ADDR=<METRICS_BIND>:<9100+n>`, where `METRICS_BIND` defaults to `127.0.0.1` and can be set to `0.0.0.0` for a remote Prometheus; the admin API is on its own loopback port either way, `MANIFEST` pointing at `data/current`), a first build straight into the `data/` layout (no adoption needed). Every instance needs at least one device (7.5), so the first build covers every IP: `DEVICES` defaults to `IPS x DEVICES_PER_IP` and can go as low as `(IPS-1) x DEVICES_PER_IP + 1`, with distribution `sm:100` to keep it quick. Its `build.json` carries a real `settings_hash`, computed by the same code as the UI (an `rcfg-sim-ui` helper subcommand), so a testbench with the same settings reuses it, then enables and starts all units and the UI. It sets the UI login: `UI_USER` and `UI_PASSWORD` if given, otherwise username `admin` and a random 20-character password, stored only as a hash and printed once at the end with the SSH tunnel command.
    - Idempotent: running it again changes nothing that is already correct.
    - `--dry-run` prints every step without doing it.
    - Refuses if `/etc/rcfg-sim` already holds env files it did not write, unless `--force`. Existing installs keep using `make adopt-data`.
@@ -891,6 +968,195 @@ Then section 7.5 in full: the `data/` layout and symlink swap, `make adopt-data`
 **Tests.** `testbench` model, validation and storage tests; lifecycle tests with the fake generator, fake instances and fake `systemctl` (start, stop, restart, switch, failure mid-start, resume after UI restart); `runs` totals tests including counter resets; settings-hash and retention tests; login, session expiry, logout, auth middleware on pages, HTMX and SSE, failed-login slowing, startup refusal without credentials; Host and HX-Request handler tests; `setup.sh` against a temp root only, never `/`, `/etc` or `/opt`. Every host-changing command used by `setup.sh` and the `install`/`install-ui` targets (`groupadd`, `useradd`, `chown`, `systemctl`, `ip`, `sysctl`) is an overridable Makefile or script variable, and tests replace them all with fakes that record calls; tests assert the recorded users, groups, units and aliases. A test must never run a real one, even when the test process is root.
 
 **Docs.** README: Testbenches, Runs, `make setup`, the login and how to change the password, and removal of all token text. CHANGELOG `[Unreleased]`: Added, Changed and the Breaking entry. List simdocs pages in the report.
+
+---
+
+### Phase 7: Devices and inventory
+
+**Goal.** After logging in, see every device in the fleet or a testbench, which ones are active or inactive and why, and export them in a tool-agnostic CSV or JSON.
+
+**Scope.**
+
+0. **Do first:** the Phase 6 follow-ups in section 17, if still open.
+
+1. **Inventory index** (`internal/ui/inventory`). Parse a build's `manifest.csv` once and cache it, keyed by build name and manifest SHA-256. 50,000 rows must load in under a second and stay in memory; drop the cache entry when the build is deleted by retention. Fields come from the manifest as it is; do not invent columns.
+
+2. **Status, per device**, joined at request time from the index, the live runtime state and the device table (`/admin/v1/devices`):
+
+   | Status | Reason | When |
+   |---|---|---|
+   | active | | Instance up, admin API reachable, port index below its `active_devices` |
+   | inactive | `beyond active count` | Port index at or above `active_devices` |
+   | inactive | `instance down` | `/healthz` does not answer |
+   | inactive | `testbench stopped` | No testbench running and the instance is stopped |
+   | unknown | `admin API off`, `bad env file`, `port clash` | The card states in 7.2 |
+   | unknown | `admin API error` | The instance's admin API answers with an error |
+   | unknown | `no instance for this IP` | The manifest has an IP no env file serves |
+   | inactive | `build not live` | Viewing a kept testbench or run build the instances are not serving |
+
+   `testbench stopped` is shown when no testbench is running and the instance is stopped; otherwise a stopped instance shows `instance down`.
+
+   A device with a `refuse` or `hang` profile is **active**: it is reachable on purpose and behaves badly by design. Its profile column says so. Last outcome and last seen come from the device table (6.1).
+
+3. **Screens** per section 10.7: Devices nav item, testbench and run Devices tabs, header search, device drawer. When a testbench or run's build is no longer kept, the tab says so and offers to build it (testbench) or explains it is gone (run).
+
+4. **Exports** (`/devices/export?format=csv|json` plus the same filter parameters as the page). Exports are **tool-agnostic**: no rConfig or other tool's tables, columns, IDs or formats. How rConfig or anything else imports the file is up to that tool.
+   - **Columns**, fixed and documented (public API): `hostname`, `ip`, `port`, `username`, `password`, `enable_password`, `model`, `status`, `status_reason`. One row per device; a header row; RFC 4180 quoting; UTF-8.
+   - **JSON**: the same fields, as an array of objects.
+   - Every export contains exactly the rows the current filters show, streamed, never built in memory whole.
+   - File names: `rcfg-sim-<build or testbench>-<status filter>-<date>.<ext>`.
+   - **Run export**: `/runs/{id}/export?format=json|csv`.
+   - **Scripts**: the export routes and `/runs/{id}/export` also accept HTTP Basic with the UI login (`curl -u admin:… 'http://127.0.0.1:8080/devices/export?format=csv&status=active'`). Only these read-only GET routes accept Basic; everything else needs the session (section 8). Failed Basic attempts count towards the failed-login slowing.
+
+5. **Test login** in the device drawer: the controller opens one SSH session to the device with its manifest credentials and runs the driver's check from a per-driver table in `internal/ui/inventory` (Cisco: `show version`; Junos: `show configuration | no-more`; TL1: `ACT-USER` then `RTRV-SW-VER`). It shows how long login took and the first 12 lines of output, or the error. Runs as a normal session, so faults apply; the drawer says when the result looks like an injected fault or the device's profile. One test at a time per browser; 10-second timeout. Host keys are not checked (lab simulator).
+
+6. **Runs: notes, tags and inventory link.** A run record gains `notes` and `tags` (editable after the run, for example "rConfig 8.4.2 build 1203") and records its `build` name and `manifest_sha256` at start. Runs can be filtered by tag, and Compare shows notes. The run's Devices tab uses the recorded build while it is kept.
+
+7. **First-login checklist**: on the Fleet screen, until dismissed, a short checklist with live ticks: instances up, admin API reachable on all, a testbench started, devices exported. Each item links to the screen that does it.
+
+**Out of scope.** Per-device enable or disable (activation stays count-based by port order). Pushing devices into rConfig through its API. Editing the manifest.
+
+**Acceptance criteria.**
+
+- On a 50,000-device build, the Devices page loads, sorts, filters and searches each in under 1 second server-side.
+- Statuses and reasons match the table in item 2 when an instance is stopped, when `active_devices` is lowered, and with admin off on one instance.
+- CSV and JSON exports contain exactly the filtered rows and exactly the documented columns, in order. No tool-specific columns or values appear.
+- `curl -u` works on export routes and is refused (401) on every other route.
+- Test login reports success on a healthy device and a clear failure on a device with an `auth_fail` fault or a `refuse` profile.
+- Run notes and tags save, filter and show in Compare.
+
+**Tests.** Manifest index and cache tests (load time, eviction); status join tests for every row of the item 2 table; export tests for CSV and JSON, including column order, quoting, filters and streaming; Basic-auth scope tests (allowed on export routes only, counts towards slowing); Test login against a fake SSH device for success, auth failure, refuse and timeout; run notes and tags tests; handler and render tests for the Devices screens and drawer.
+
+**Docs.** README: Devices, exports (with the `curl` example), Test login, run notes and tags. CHANGELOG `[Unreleased]` Added. List simdocs pages in the report.
+
+---
+
+### Phase 8: Design system and device catalogue (IP and optical)
+
+**Goal.** Make building a testbench crisp and obvious: pick what you are testing, then see only the levers that apply. Bring the optical (TL1) models and their options into the UI as their own family, separate from IP.
+
+**Scope.**
+
+0. **Component set and polish pass (section 9.6).** Build the components in `internal/ui/web/views/components/` and move every existing screen onto them: Fleet, Failures, Activity, Build, Testbenches, Runs, Devices, login. No behaviour changes in this item apart from one: the active testbench pill's name opens the running run and a devices icon opens its Devices view (10.5). Otherwise only consistency: one primary action per view with a summary sentence, inline help instead of long labels, Advanced disclosures, empty states, keyboard rules. Render tests for every component.
+
+1. **Catalogue from the generator (D14).** Add `rcfg-sim-gen catalogue --json`, printing:
+   - `families`: id, name, one-line description (`ip`: "Enterprise IP", `optical`: "Optical transport (TL1)").
+   - `models`: id, family, vendor, driver, protocol (`cli` or `tl1`), one-line description, average config size, and `options` (name, flag, type, range, default, one-sentence help). The Ciena GNE model declares `rne_dual_home_pct` (flag `--rne-dual-home-pct`).
+   - `drivers`: id, vendor, protocol, whether it requires SSH auth (from `RequiresSSHAuth()`).
+   The data comes from the existing model registry and driver list; add the `family`, description and option metadata there, not in a separate table. Driver metadata (id, vendor, protocol, requires SSH auth) moves into a small standard-library-only package that both `internal/configs` and `internal/sshsrv` import; each driver's `RequiresSSHAuth()` returns the value from it, and a test fails if the registered drivers and the metadata disagree. `rcfg-sim-gen` never imports `internal/sshsrv` (D7). The UI (`internal/ui/catalogue`) runs it once at startup and after a binary change, and builds every model list and option field from it.
+
+2. **Exact counts.** Add `rcfg-sim-gen --counts "sm:6000,md:4000,ciena-6500-tl1-gne:2000"`, an alternative to `--distribution` that produces exactly those devices per model (mutually exclusive with `--distribution`). Generator output for `--distribution` must not change; the deterministic-output tests must pass untouched. Testbenches store counts, not percentages.
+
+3. **Testbench format.** Replace `build` with:
+
+   ```json
+   "devices": {
+     "source": "generated",
+     "generated": {
+       "seed": 42,
+       "families": {
+         "ip":      { "models": { "sm": 6000, "md": 4000 } },
+         "optical": { "models": { "ciena-6500-tl1-gne": 2000 },
+                      "ssh_auth": "driver",
+                      "options": { "rne_dual_home_pct": 30 } }
+       }
+     }
+   }
+   ```
+
+   - A family that is absent is not in the fleet. At least one family must have devices.
+   - `ssh_auth` lives under `optical` because that is where the choice matters; it maps to the instance's `--ssh-auth` (`driver`, `password` or `none`, as the README table defines them). With both families present, `none` is refused (it would also remove passwords from IP devices). Without an optical family, `ssh_auth` is `password` (today's default).
+   - `SSH_AUTH` becomes a controller-owned env key (7.3). Changing it needs a restart, so the UI shows "restart needed".
+   - Model options are validated against the catalogue.
+   - Count bounds per 7.5: the total must fill every instance by the existing rule (Phase 9 adds unused instances).
+   - The build `settings_hash` covers the counts, options and `ssh_auth`-independent build settings; `ssh_auth` is runtime, not build.
+   - Old testbench files (with `build`) are migrated on load: distribution percentages become counts of the stated total, all in the `ip` or `optical` family by catalogue lookup. Shipped testbenches are rewritten in the new format.
+
+4. **Guided flow** (section 10.5): the stepper, the "what are you testing" choice cards for the generated kinds (Enterprise IP, Optical transport, Service provider mix, Start from shipped), the IP and optical device panels with count rows, presets, the SSH login segmented control in plain words ("Login inside TL1 only, like real 6500s" maps to `driver`; "SSH password first, then TL1 login" to `password`; "No SSH password at all" to `none`, optical-only fleets), optical options with inline help and a small explanatory diagram for dual-homed RNEs, the behaviour step, and the review step with the summary sentence and stacked bar. The Topology scenario card is shown but marked "coming in Phase 9" until then.
+
+5. **Shipped testbenches.** Regroup the existing ones under Enterprise IP. Add: *Optical: Ciena GNE network* (GNE plus RNEs, 30% dual-homed), *Optical: three-vendor mix* (Ciena, Infinera, Cisco ONS), *Service provider mix* (IP and optical together). Device counts sized like the existing ones.
+
+6. **Devices screen and filters** gain a family filter and family badge, from the catalogue.
+
+**Out of scope.** Scenarios (Phase 9). Adding new generator models (for example Junos or Arista); the catalogue makes them appear automatically once someone adds them.
+
+**Acceptance criteria.**
+
+- Every screen uses the component set; no screen has its own button, card or input styles.
+- `rcfg-sim-gen catalogue --json` lists every registered model and driver with family and options; adding a model to the registry in a test makes it appear in the UI's model list with no UI change.
+- `--counts` produces exactly the requested devices per model; `--distribution` output is byte-identical to before.
+- A new optical testbench shows no IP panel and no IP-only option, and vice versa; the service provider mix shows both panels with separate subtotals.
+- The SSH login control maps to the right `SSH_AUTH` value, `none` is refused for a mixed fleet, and changing it triggers the restart warning and a rolling restart on Start.
+- Old testbench files load and run unchanged.
+- Each shipped testbench validates and, on a host it fits, starts.
+
+**Tests.** Component render tests; catalogue JSON golden test and a registry-extension test; `--counts` tests and unchanged deterministic-output tests; testbench migration tests; validation tests (family rules, `ssh_auth` rules, option ranges, count bounds); handler and render tests for every step of the guided flow; shipped testbench validation tests.
+
+**Docs.** README: device families, the catalogue command, `--counts`, the guided flow. CHANGELOG `[Unreleased]`. List simdocs pages in the report.
+
+---
+
+### Phase 9: Scenario library (topology testbenches)
+
+**Goal.** Run curated scenarios such as mesh-campus from the UI as testbenches, separate from generated IP and optical fleets, and let people add their own by dropping in a folder.
+
+**Scope.**
+
+0. **Phase 8 follow-ups, do first** (section 17):
+   - Testbench list grouping per 10.5: user testbenches go in their kind's group with a **Yours** badge, not a Custom group; invalid ones go in **Needs attention**.
+   - Migration: an old testbench with a generator option the catalogue doesn't know still loads, shows in **Needs attention** with the reason, and cannot start until fixed. It is never refused or dropped.
+   - Build screen: count rows (the same component as the guided flow) instead of percentages.
+   - Navigation line and pill per section 10.
+1. **Do first: relative manifest paths in `rcfg-sim`.** Today scenario manifests need absolute `config_file` paths. Make `rcfg-sim` resolve a relative `config_file` against the manifest's own directory. Check first how relative paths behave today: if they currently resolve against the working directory, this is a behaviour change for released users and needs `### Breaking` with `#### Migration` (section 13 rule). Stop and report if unsure. Update `scenarios/mesh-campus` to relative paths and keep `PLAYBOOK.md` working by hand. `scenarios/example` is not a scenario: it is the `--commands-root` layout example the README points to, and stays as it is.
+
+2. **Scenario package format.** A folder with `scenario.json`, `manifest.csv`, `configs/`, optional `commands/`, optional `README.md`:
+
+   ```json
+   {
+     "id": "mesh-campus",
+     "name": "Mesh campus",
+     "description": "Three switches with matching LLDP and CDP neighbours across EOS, Junos and IOS.",
+     "version": 1,
+     "drivers": ["cisco_ios", "junos"],
+     "auth": { "mode": "any_password" },
+     "ssh_auth": "password",
+     "topology": {
+       "nodes": [{ "id": "core-01", "tier": 0 }, { "id": "dist-01", "tier": 1 }, { "id": "access-01", "tier": 2 }],
+       "links": [["core-01", "dist-01"], ["core-01", "access-01"]]
+     },
+     "suggested_runtime": { "faults": {}, "delay_ms": { "min": 50, "max": 300 } }
+   }
+   ```
+
+   - `auth.mode` is `manifest` (use the manifest's credentials) or `any_password` (empty `--password` and `--enable-password`, so any password works, as the mesh-campus playbook does).
+   - Validation on load: every manifest hostname has a config file; every `commands/` folder matches a hostname; every driver is registered; topology nodes are manifest hostnames. An invalid package shows in the library with the reason.
+   - Shipped packages live in `scenarios/` (embedded or installed with the binary); user packages in `--scenarios-dir`.
+
+3. **Testbench source `scenario`.** `"devices": { "source": "scenario", "scenario": { "id": "mesh-campus", "version": 1 } }`. The behaviour half is unchanged. Per-instance overrides apply to the instances the scenario uses.
+
+4. **Install as a build.** Starting a scenario testbench copies the package into `data/builds/<scenario-id>-v<version>-<hash>/`, remaps every device's IP and port onto the host's instances (first instance first, ports from `PORT_START`, hostnames kept), rewrites the manifest paths, and records `settings_hash` so the next start reuses it. Then the normal Start: swap `current`, apply settings, start.
+   - **Key ownership and restore.** When a scenario testbench takes over `COMMANDS_ROOT`, `PASSWORD` and `ENABLE_PASSWORD`, the controller first saves each instance's current values (in `--data-dir/owned-keys/<IP>.json`). When the next generated testbench starts, it restores exactly those saved values, including anything set by hand, then deletes the snapshot. Generated-to-generated starts never touch these keys. A new generated build takes credentials from the most recent generated build, never from a scenario manifest.
+   - The controller sets `COMMANDS_ROOT` to the build's `commands/` and, for `any_password`, `PASSWORD` and `ENABLE_PASSWORD` to empty, plus `SSH_AUTH` from the package. These are controller-owned keys while a scenario testbench is active; starting a generated testbench restores them to defaults. All need a restart, shown in the review step.
+
+5. **Unused instances.** A scenario usually needs fewer instances than the host has. New `rcfg-sim` flag `--allow-empty` (env `ALLOW_EMPTY`, default `false`): with it, an instance with no devices in the manifest starts, serves `/healthz` and the admin API, reports `devices: 0`, binds no SSH listeners and logs that it is idle, instead of exiting with an error. Without it, behaviour is unchanged (the startup error stays for CLI users). The unit default stays `false`. The controller writes `ALLOW_EMPTY=true` into every env file it manages (`make setup`, testbench Start), so after a reboot unused instances idle quietly instead of failing and looping on `Restart=on-failure`. No `systemctl enable`/`disable`, so the polkit rule stays as narrow as it is. Instances with no devices in the live build are stopped and shown with a new card state, **Not used by this testbench**, in grey. They are excluded from fan-out, the active-device split, drift checks and rolling restarts, and show as `inactive` / `not used by this testbench` on the Devices screen. They start again when a testbench that needs them starts. This replaces the "every instance must have a device" rule in 7.5 for scenarios only; generated fleets keep it.
+
+6. **Screens.** The Topology scenario choice card in the guided flow becomes live; the scenario library (section 10.8) with choice cards, detail view and the topology diagram (server-rendered SVG, nodes in tiers, links as lines, keyboard focusable nodes that show the device); "Create testbench from this scenario".
+
+7. **Shipped testbench.** *Topology: mesh campus*, from the package.
+
+**Out of scope.** Uploading scenario packages through the browser (drop-in folder only for now). Mixing a scenario with a generated fleet in one testbench.
+
+**Acceptance criteria.**
+
+- `rcfg-sim` loads a manifest with relative `config_file` paths from any working directory; the mesh-campus playbook still works by hand.
+- The shipped mesh-campus scenario validates; a broken package (a folder with an invalid `scenario.json`) shows its reason and cannot be used. Folders without `scenario.json`, such as `scenarios/example`, are not packages and are skipped silently.
+- Starting *Topology: mesh campus* on a multi-instance host serves its three devices on the first instance, answers the LLDP and CDP commands from `commands/`, accepts any password, and shows the other instances as Not used. Starting a generated testbench afterwards restores the default auth and commands settings and starts every instance again.
+- Devices, Activity, runs and exports work for a scenario testbench.
+- A package dropped into `--scenarios-dir` appears in the library without a restart of the instances (a UI reload is enough).
+
+**Tests.** Relative path resolution tests in `rcfg-sim`; package validation tests (each failure reason); install-as-build tests (remapping, path rewrite, settings hash reuse); controller-owned key tests (set on scenario start, restored on generated start); unused-instance tests across fan-out, split, drift and restarts; handler and render tests for the library, detail view and topology SVG.
+
+**Docs.** README: scenario packages, `scenario.json`, `--scenarios-dir`, relative manifest paths, the library. Update the mesh-campus README and PLAYBOOK. CHANGELOG `[Unreleased]`. List simdocs pages in the report.
 
 ---
 
@@ -942,12 +1208,30 @@ The running list of open items across all phases. Update it at the end of every 
 ### Maintainer: git and review
 
 - [x] Commit Phase 3, Phase 4 and Phase 5 item 0 (`beae302`).
-- [ ] Commit the rest of Phase 5 and Phase 6 item 0. Phase 6 is now stacked on uncommitted Phase 5.
+- [x] Commit Phase 5 and Phase 6 item 0 (up to `b00248b`).
+- [ ] Commit Phase 6 and Phase 7 (both uncommitted, stacked).
 - [ ] Check the dev host after the Phase 3 `sudo` incident: nothing new under `/etc`, no new units or polkit rules.
 - [ ] Run the full test suite after Phase 5.
 - [ ] Cut a release: move `[Unreleased]` to a version in the CHANGELOG (contains a `### Breaking` entry from Phase 3).
 
 ### Maintainer: manual checks agents cannot do
+
+- [ ] Scenarios screen and topology diagram, both themes, tabbing through nodes; testbench list filter and Needs attention; Build count rows in both themes (P9).
+- [ ] Unused-instance card on a real multi-instance host, then reboot the host with a scenario live: unused instances idle, nothing loops (P9 follow-up).
+- [ ] Drop a package into `--scenarios-dir` on a real install (folder readable by `rcfgsim-ui`) (P9).
+
+- [ ] Components and keyboard rules in a browser: Escape, tab order, toasts (P8).
+- [ ] A shipped optical testbench on a host it fits (P8).
+
+- [ ] Walk the guided flow for each kind in a browser, both themes, keyboard only once (P8).
+- [ ] Run *Optical: Ciena GNE network* against rConfig with each SSH login mode (P8).
+- [ ] Run *Topology: mesh campus* from the UI and check rConfig sees the LLDP and CDP neighbours (P9).
+
+- [ ] Devices screen and drawer in a browser, both themes; page load on a real 50,000-device build (P7).
+- [ ] Test login against a TL1 device on the real simulator (P7).
+- [ ] `curl -u` export from a remote host through the tunnel (P7).
+- [ ] Import the CSV export into a test rConfig using rConfig's own import, then run a backup against the sim (P7).
+- [ ] rConfig side, not the sim: confirm whether rConfig's device importer accepts the same IP on different ports. If not, raise an rConfig ticket to key uniqueness on IP plus port (real networks need it too: terminal servers, PAT jump hosts).
 
 - [ ] Themes (Phase 3): Dark, Light and Auto. Logo swaps, gradient hairline on the header, copper buttons readable in both.
 - [ ] Login in a browser: log in, log out, and the slowed login after 5 failures (Phase 6).
@@ -955,22 +1239,53 @@ The running list of open items across all phases. Update it at the end of every 
 - [ ] Polkit rule on a real lab host with the `rcfgsim-ui` user: start, stop and restart work for `rcfg-sim@<IP>.service` and nothing else.
 - [ ] Host-key migration snippet run on a real install before release.
 - [ ] `make adopt-data` run with sudo on a real lab install before release (try `--dry-run` first).
-- [ ] `make setup` on a fresh vanilla VM after Phase 6, then a shipped testbench started, stopped and restarted from the UI.
+- [ ] Testbenches and Runs screens and the header pill in a browser, both themes.
+- [ ] Disk use with `--keep-builds 3` at 50,000 devices.
+- [ ] `make setup` run twice on a fresh vanilla VM (second run changes nothing), then a shipped testbench started, stopped and restarted from the UI.
 - [ ] Full 50,000-device build on a lab host: compare actual disk use and time with the Build screen's estimate.
 - [ ] Build screen in both themes.
 
 ### Code follow-ups
 
-- [ ] Phase 6: Testbenches, auth removal, `make setup`.
+- [x] Phase 8: design system and device catalogue (IP and optical).
+- [x] Phase 8 follow-ups (Phase 9 item 0): list grouping, migration into Needs attention, Build count rows, navigation line.
+- [x] Phase 9: scenario library.
+- [x] Phase 9 follow-up: save and restore the exact pre-scenario values of `COMMANDS_ROOT`, `PASSWORD`, `ENABLE_PASSWORD` (Phase 9 item 4).
+- [x] Phase 9 follow-up: `rcfg-sim --allow-empty`, set by the controller on every instance, so unused instances idle after a reboot instead of failing (Phase 9 item 5).
+- [ ] Keep the released unit's behaviour: `rcfg-sim@.service` and the instance env sample default `ALLOW_EMPTY=false` (so a misconfigured instance still fails loudly). Only the controller (`make setup`, testbench Start) writes `ALLOW_EMPTY=true` into the env files it manages. Update the UI's `UnitDefaults` and README to match.
+- [ ] Startup warning when the catalogue can't be read; testbench screens show the error instead of the list (done in Phase 8; check in a browser).
+
+- [x] Phase 7: Devices and inventory.
+- [x] Phase 7 follow-up: move the per-device routes from `/devices/{hostname}` to `/device/{hostname}` so a hostname of `find` or `export` cannot be shadowed.
+- [x] Phase 7 follow-up: move the smoke script out of the agent scratchpad (temporary) into the repo as a dev script, for example `scripts/dev-smoke.sh`, with its restart steps in CONTRIBUTING.md.
+- [ ] CONTRIBUTING.md setup section: says Go 1.22+ and a 1.22 to 1.24 CI matrix, and that `make build` makes two binaries. Update to Go 1.26+, CI 1.26 and 1.27, and three binaries (`rcfg-sim`, `rcfg-sim-gen`, `rcfg-sim-ui`).
+- [ ] Decide later: Test login trusts any host key. Fine for a lab simulator.
+
+- [x] Phase 6: Testbenches, login, admin listener, `make setup`.
+- [x] Phase 6 follow-up: restore the `### Breaking` entry for the host-key default and `/etc/rcfg-sim` permissions, with its Migration, in `[Unreleased]` (section 13 CHANGELOG rule).
+- [x] Phase 6 follow-up: `setup.sh` writes a real `settings_hash` for the first build via an `rcfg-sim-ui` helper.
+- [x] Phase 6 follow-up: Restart waits for up and no drift (item 3).
+- [x] Phase 6 follow-up: `METRICS_BIND` option in `setup.sh` (item 6).
+- [x] Phase 6 follow-up: `ui_gap` run events and the "incomplete totals" mark (item 4).
+- [ ] Decide later: background polling (header pill, Fleet) keeps a login session alive while a tab is open. Fine for a lab tool; revisit if the UI is ever exposed beyond a tunnel.
 
 - [x] Active-device split includes down instances (Phase 5 item 0).
-- [ ] Check the data directory derived from `MANIFEST` is writable before a build plans, and refuse with the reason if not (7.5). Small fix.
+- [x] Data directory writability check before a build plans (Phase 6).
 
 ### simdocs ([rconfig-sim-docs](https://github.com/rconfig/rconfig-sim-docs))
+
+- [ ] `build.json` `counts`, builds use `--counts`; `rcfg-sim-ui settings-hash` `--counts` and `--gen-bin`; Devices `family` filter (P8).
+- [ ] Device families and the guided flow; optical options and SSH login modes in plain words; `rcfg-sim-gen catalogue` and `--counts` (P8).
+- [ ] Scenario library, package format, `--scenarios-dir`, relative manifest paths (Breaking, with migration), mesh-campus UI route, testbench list grouping and Needs attention, Build count rows, unused instances and `--allow-empty` (P9).
+
+- [ ] Devices page: statuses and reasons, the CSV and JSON columns, the `curl` export, Test login (P7).
+- [ ] Runs page: notes, tags, `ui_gap`, `/runs/{id}/export?format=` (P7).
+- [ ] One-step setup page: `METRICS_BIND`, settings-hash reuse; CLI reference: `rcfg-sim-ui settings-hash`; Security page: Basic accepted on export routes only (P7).
 
 - [ ] Requirements: Go 1.26+.
 - [ ] CLI reference, `rcfg-sim`: `--fault-rates`, `--active-devices` (P1), `--admin-addr` (loopback only, P6). No token flags.
 - [ ] Login page: `hash-password`, changing the password, removed token text (P6).
+- [ ] One-step setup page (`make setup`, its variables, `--dry-run`, `--force`, `METRICS_BIND`); Testbenches and Runs pages; Admin API page (`--admin-addr`, loopback only); Web UI flags and env variables; Upgrading (host-key move, login) (P6).
 - [ ] CLI reference: new `rcfg-sim-ui` binary and its flags, including `--ui-allowed-hosts`, `--keep-builds`, `--keep-runs` (P3, P6).
 - [ ] Security page: basic login and changing the password, admin API on loopback with no auth, SSH tunnel, Host and cross-site protections (P6).
 - [ ] New Testbenches and Runs pages, and `make setup` as the recommended install path (P6).

@@ -1,5 +1,5 @@
-// Package admin serves the rcfg-sim admin API, /admin/v1/*, on the metrics
-// listener when --admin is set. It reads and changes the instance's live
+// Package admin serves the rcfg-sim admin API, /admin/v1/*, on its own
+// loopback listener when --admin-addr is set. It reads and changes the instance's live
 // runtime config and serves its activity data (device states and a sampled
 // event stream). See docs/UI-ARCHITECTURE.md section 6 for the contract.
 //

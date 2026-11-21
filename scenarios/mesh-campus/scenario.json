@@ -1,0 +1,18 @@
+{
+  "id": "mesh-campus",
+  "name": "Mesh campus",
+  "description": "Three switches with matching LLDP and CDP neighbours across EOS, Junos and IOS.",
+  "version": 1,
+  "drivers": ["cisco_ios", "junos"],
+  "auth": { "mode": "any_password" },
+  "ssh_auth": "password",
+  "topology": {
+    "nodes": [
+      { "id": "core-01", "tier": 0 },
+      { "id": "dist-01", "tier": 1 },
+      { "id": "access-01", "tier": 2 }
+    ],
+    "links": [["core-01", "dist-01"], ["core-01", "access-01"]]
+  },
+  "suggested_runtime": { "faults": {}, "delay_ms": { "min": 50, "max": 300 } }
+}

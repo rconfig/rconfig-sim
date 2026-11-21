@@ -1,7 +1,10 @@
 package views
 
-// Layout is the shell of every page: header with logo, fleet health and
-// theme toggle; the left rail; the pending-changes bar and flash area.
+import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
+
+// Layout is the shell of every page: header with the logo, the active
+// testbench pill, device search, fleet health, the theme toggle and log
+// out (section 10); the left rail; the pending-changes bar and flash area.
 templ Layout(p Page) {
 	<!DOCTYPE html>
 	<html lang="en" data-theme="dark">
@@ -29,16 +32,28 @@ templ Layout(p Page) {
 						<img class="logo-dark h-8 w-auto" src="/static/img/sim-logo-white.svg" alt="Sim by rConfig"/>
 						<img class="logo-light h-8 w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
 					</a>
-					@HealthPill(p.Up, p.Total, false)
+					if p.Bench.State != "" {
+						@BenchPillView(p.Bench)
+					}
 					<div class="ml-auto flex items-center gap-3">
 						if p.User != "" {
-							<span class="text-xs text-muted">{ p.User }</span>
-							<button type="button" hx-post="/logout" class="rounded-md border border-line px-2.5 py-1 text-xs hover:bg-tint">Log out</button>
+							<form method="get" action="/devices/find" role="search">
+								@ui.Input(templ.Attributes{"name": "q", "placeholder": "Find a hostname", "aria-label": "Find a device by hostname", "class": "num w-44 text-xs"})
+							</form>
 						}
-					</div>
-					<div class="flex items-center gap-1 rounded-card border border-line p-0.5" role="group" aria-label="Theme">
-						for _, t := range []string{"dark", "light", "auto"} {
-							<button type="button" data-theme-set={ t } aria-pressed="false" class="rounded-md px-2.5 py-1 text-xs capitalize text-muted hover:text-fg aria-pressed:bg-tint aria-pressed:text-fg">{ t }</button>
+						@HealthPill(p.Up, p.Total, false)
+						<div class="segmented" role="group" aria-label="Theme">
+							for _, t := range []string{"dark", "light", "auto"} {
+								@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"data-theme-set": t, "aria-pressed": "false"}) {
+									<span class="capitalize">{ t }</span>
+								}
+							}
+						</div>
+						if p.User != "" {
+							<span class="text-xs text-muted">{ p.User }</span>
+							@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/logout"}) {
+								Log out
+							}
 						}
 					</div>
 				</div>
@@ -47,9 +62,13 @@ templ Layout(p Page) {
 				<nav class="sticky top-14 h-[calc(100vh-3.5rem)] w-44 shrink-0 border-r border-line p-3" aria-label="Main">
 					<ul class="flex flex-col gap-1">
 						@navItem("/fleet", "Fleet", p.Nav == "fleet", true)
+						@navItem("/testbenches", "Testbenches", p.Nav == "testbenches", true)
+						@navItem("/runs", "Runs", p.Nav == "runs", true)
+						@navItem("/devices", "Devices", p.Nav == "devices", true)
 						@navItem("/failures", "Failures", p.Nav == "failures", true)
 						@navItem("/activity", "Activity", p.Nav == "activity", true)
 						@navItem("/build", "Build", p.Nav == "build", true)
+						@navItem("/scenarios", "Scenarios", p.Nav == "scenarios", true)
 					</ul>
 				</nav>
 				<main class="min-w-0 flex-1 p-6">
@@ -95,23 +114,14 @@ templ HealthPill(up, total int, oob bool) {
 // Flashes renders action results into #flash.
 templ Flashes(fs []Flash) {
 	for _, f := range fs {
-		<div class={ "mb-4 rounded-card border-l-4 border-y border-r border-line bg-panel px-4 py-3", flashClass(f.Kind) } role="status">
-			<p class="font-medium">{ f.Text }</p>
-			if len(f.Lines) > 0 {
-				<ul class="mt-1 list-disc pl-5 text-muted">
-					for _, l := range f.Lines {
-						<li>{ l }</li>
-					}
-				</ul>
-			}
-		</div>
+		@ui.Toast(f.Kind, f.Text, f.Lines)
 	}
 }
 
 // PendingBar is the pending-changes bar. Empty when nothing would change.
 templ PendingBar(d Diff) {
 	if len(d.Items) > 0 {
-		<div class="brand-fill mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-card px-4 py-3 shadow-sm">
+		<div class="brand-fill pending-bar">
 			<div class="min-w-0 flex-1">
 				<p class="font-semibold">Pending changes, not applied</p>
 				<ul class="mt-1 flex flex-col gap-0.5">
@@ -123,7 +133,9 @@ templ PendingBar(d Diff) {
 					<p class="mt-1 text-xs">{ d.Note }</p>
 				}
 			</div>
-			<button type="button" hx-post={ d.ApplyURL } hx-include={ "#" + d.Form } hx-target="#flash" class="rounded-md bg-zinc-950 px-4 py-2 font-semibold text-white hover:bg-zinc-800">Apply</button>
+			@ui.Button(ui.Contrast, "", templ.Attributes{"hx-post": d.ApplyURL, "hx-include": "#" + d.Form, "hx-target": "#flash"}) {
+				Apply
+			}
 		</div>
 	}
 }
@@ -154,19 +166,22 @@ templ LoginPage() {
 					<img class="logo-dark h-10 w-auto" src="/static/img/sim-logo-white.svg" alt="Sim by rConfig"/>
 					<img class="logo-light h-10 w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
 				</div>
-				<form hx-post="/login" hx-target="#login-error" hx-swap="innerHTML" class="brand-hairline flex flex-col gap-4 rounded-card border border-line bg-panel p-6">
-					<h1 class="text-xl">Log in</h1>
-					<label class="flex flex-col gap-1">
-						<span>Username</span>
-						<input name="username" type="text" autocomplete="username" required autofocus class="rounded-md border border-line bg-bg px-3 py-2"/>
-					</label>
-					<label class="flex flex-col gap-1">
-						<span>Password</span>
-						<input name="password" type="password" autocomplete="current-password" required class="rounded-md border border-line bg-bg px-3 py-2"/>
-					</label>
-					<div id="login-error" aria-live="polite"></div>
-					<button type="submit" class="rounded-md bg-accent-600 px-4 py-2 font-medium text-white hover:bg-accent-700">Log in</button>
-				</form>
+				<div class="brand-hairline">
+					@ui.Card("Log in", "") {
+						<form hx-post="/login" hx-target="#login-error" hx-swap="innerHTML" class="flex flex-col gap-4">
+							@ui.Field("Username", "") {
+								@ui.Input(templ.Attributes{"name": "username", "type": "text", "autocomplete": "username", "required": true, "autofocus": true})
+							}
+							@ui.Field("Password", "") {
+								@ui.Input(templ.Attributes{"name": "password", "type": "password", "autocomplete": "current-password", "required": true})
+							}
+							<div id="login-error" aria-live="polite"></div>
+							@ui.Submit(ui.Primary, nil) {
+								Log in
+							}
+						</form>
+					}
+				</div>
 			</main>
 		</body>
 	</html>
@@ -175,5 +190,5 @@ templ LoginPage() {
 // LoginError is a failed login's message. It never says which value was
 // wrong.
 templ LoginError(msg string) {
-	<p class="rounded-md border border-st-error px-3 py-2 text-st-error" role="alert">{ msg }</p>
+	@ui.Toast(ui.ToastError, msg, nil)
 }

@@ -80,6 +80,38 @@
     });
   });
 
-  document.addEventListener("DOMContentLoaded", function () { markTheme(); updateEstimates(); });
+  // Count rows: - and + buttons step the row's number input.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-step]");
+    if (!b) return;
+    var inp = b.closest("[data-count-row]") && b.closest("[data-count-row]").querySelector("input[type=number]");
+    if (!inp) return;
+    var v = (Number(inp.value) || 0) + Number(b.getAttribute("data-step")) * (e.shiftKey ? 100 : 1);
+    inp.value = String(Math.max(0, v));
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+    inp.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  // Toasts: OK ones fade after a few seconds; others stay until dismissed.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-dismiss]");
+    if (b && b.closest(".toast")) b.closest(".toast").remove();
+  });
+  function fadeToasts() {
+    document.querySelectorAll('[data-toast="ok"]:not([data-fading])').forEach(function (t) {
+      t.setAttribute("data-fading", "1");
+      setTimeout(function () { t.remove(); }, 6000);
+    });
+  }
+
+  // Escape closes drawers and open help or Advanced folds.
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    document.querySelectorAll("[data-drawer]").forEach(function (d) { d.innerHTML = ""; });
+    document.querySelectorAll("details.help[open]").forEach(function (d) { d.removeAttribute("open"); });
+  });
+
+  document.addEventListener("DOMContentLoaded", function () { markTheme(); updateEstimates(); fadeToasts(); });
+  document.addEventListener("htmx:afterSettle", fadeToasts);
   document.addEventListener("htmx:afterSettle", updateEstimates);
 })();

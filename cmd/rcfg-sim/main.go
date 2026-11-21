@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -32,7 +32,7 @@ func main() {
 		faultTypes   = flag.String("fault-types", "", "comma-separated fault types: auth_fail,disconnect_mid,slow_response,malformed")
 		faultRate    = flag.Float64("fault-rate", 0.0, "probability [0,1] that an enabled fault fires per event")
 		faultRates   = flag.String("fault-rates", "", "per-type fault probabilities [0,1]: type=rate,... e.g. auth_fail=0.02,disconnect_mid=0.005 (replaces --fault-rate/--fault-types; setting both is an error)")
-		adminOn      = flag.Bool("admin", false, "serve the admin API (/admin/v1/*) on --metrics-addr; it has no authentication, so keep --metrics-addr on loopback")
+		adminAddr    = flag.String("admin-addr", "", "serve the admin API (/admin/v1/*) on its own listener at this loopback host:port, e.g. 127.0.0.1:9200 (empty = off). It has no authentication, so a non-loopback address is refused")
 		activeDevs   = flag.String("active-devices", "all", "how many devices, in port order from --port-start, accept sessions: all, or 0..port-count; the rest drop connections like the refuse profile")
 		devProfiles  = flag.String("device-profiles", "", "per-device behaviour for a share of the fleet: profile@percent,... e.g. hang:3600s@3%,latency:200-800ms@10% (profiles: hang:<duration>, latency:<min>-<max>, refuse, disconnect)")
 	)
@@ -47,6 +47,7 @@ func main() {
 	flag.StringVar(&cfg.SSHAuthMode, "ssh-auth", "password", "SSH transport auth: password (all devices) | driver (per-driver: Cisco IOS yes, TL1 drivers no) | none (in-band auth only)")
 	flag.IntVar(&cfg.ResponseDelayMinMS, "response-delay-ms-min", 50, "min per-command response delay (ms)")
 	flag.IntVar(&cfg.ResponseDelayMaxMS, "response-delay-ms-max", 500, "max per-command response delay (ms)")
+	flag.BoolVar(&cfg.AllowEmpty, "allow-empty", false, "start even when the manifest has no devices for this IP and port range: serve /healthz and the admin API, bind no SSH listeners (default false: exit with an error)")
 	flag.StringVar(&cfg.CommandsRoot, "commands-root", "", "directory of per-device command output files, DIR/<hostname>/<slug>.txt (empty = disabled)")
 	flag.Int64Var(&cfg.ProfileSeed, "profile-seed", 42, "seed deciding which devices --device-profiles picks; same seed, same devices")
 	flag.IntVar(&cfg.MaxConcurrentSessions, "max-concurrent-sessions", 5000, "cap on concurrent sessions")
@@ -57,6 +58,13 @@ func main() {
 		os.Exit(2)
 	}
 	flag.Parse()
+	// Refuse a non-loopback admin address before loading any configs.
+	if *adminAddr != "" {
+		if err := sshsrv.CheckLoopbackAddr(*adminAddr); err != nil {
+			fmt.Fprintf(os.Stderr, "rcfg-sim: --admin-addr: %v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	cfg.ManifestPath = *manifestPath
 	cfg.Logger = makeLogger(*logLevel)
@@ -93,12 +101,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "rcfg-sim: %v\n", err)
 		os.Exit(1)
 	}
-	if *adminOn {
-		if cfg.MetricsAddr == "" {
-			fmt.Fprintln(os.Stderr, "rcfg-sim: --admin needs --metrics-addr")
-			os.Exit(1)
-		}
-		server.Mount(admin.Prefix, admin.Handler(server, admin.Options{
+	if *adminAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle(admin.Prefix, admin.Handler(server, admin.Options{
 			Version:   buildVersion(),
 			ListenIP:  cfg.ListenIP,
 			PortStart: cfg.PortStart,
@@ -106,10 +111,10 @@ func main() {
 			Devices:   server.DeviceCount(),
 			Logger:    cfg.Logger,
 		}))
-		if !loopback(cfg.MetricsAddr) {
-			cfg.Logger.Warn("admin API has no authentication and is on a non-loopback address; anyone who can reach it can change faults and capacity. Bind --metrics-addr to 127.0.0.1", "metrics_addr", cfg.MetricsAddr)
+		if err := server.ServeAdmin(*adminAddr, mux); err != nil {
+			fmt.Fprintf(os.Stderr, "rcfg-sim: --admin-addr: %v\n", err)
+			os.Exit(1)
 		}
-		cfg.Logger.Info("admin API enabled", "addr", cfg.MetricsAddr, "prefix", admin.Prefix)
 	}
 
 	if err := server.Start(); err != nil {
@@ -126,7 +131,8 @@ func main() {
 
 // removedFlags are flags taken out of rcfg-sim, with what to do instead.
 var removedFlags = map[string]string{
-	"admin-token": "--admin-token was removed: the admin API has no authentication. Keep --metrics-addr on 127.0.0.1 (make setup does) and drop ADMIN_TOKEN from the env file",
+	"admin":       "--admin was replaced by --admin-addr=127.0.0.1:<port>: the admin API now has its own loopback-only listener (env ADMIN_ADDR)",
+	"admin-token": "--admin-token was removed: the admin API has no authentication and listens only on loopback (--admin-addr). Drop ADMIN_TOKEN from the env file",
 }
 
 // checkRemovedFlags turns a removed flag into a clear error instead of
@@ -171,19 +177,6 @@ func buildVersion() string {
 		return "dev"
 	}
 	return strings.TrimPrefix(v, "v")
-}
-
-// loopback reports whether addr (host:port) binds only a loopback address.
-func loopback(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // parseFaults builds the fault Set from --fault-rates, or from the legacy

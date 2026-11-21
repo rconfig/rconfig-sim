@@ -24,6 +24,10 @@ func infineraModel() model {
 		template: "infinera_tl1",
 		tmplFile: "infinera_tl1_node.tmpl",
 		build:    func(cfg Config, index int, m model) any { return buildInfineraNode(cfg, index) },
+
+		family:      FamilyOptical,
+		description: "Infinera DTN-X node fronting 12 to 30 remote nodes; paged RTRV-TIDMAP and per-node inventories.",
+		avgBytes:    7_400,
 	}
 }
 
@@ -34,6 +38,10 @@ func ciscoONSModel() model {
 		template: "cisco_ons_tl1",
 		tmplFile: "cisco_ons_tl1_gne.tmpl",
 		build:    func(cfg Config, index int, m model) any { return buildCiscoONSGNE(cfg, index) },
+
+		family:      FamilyOptical,
+		description: "Cisco ONS 15454 gateway NE fronting 3 to 8 end NEs; positional RTRV-MAP-NETWORK records and per-ENE inventories.",
+		avgBytes:    2_950,
 	}
 }
 

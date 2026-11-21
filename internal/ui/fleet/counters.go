@@ -156,6 +156,19 @@ func (p *RatePoint) addRates(prev, cur Counters, dt float64) {
 	}
 }
 
+// counterDeltas is how much each counter grew from prev to cur. The
+// ActiveSessions gauge is not a counter and is left zero.
+func counterDeltas(prev, cur Counters) Counters {
+	d := Counters{Bytes: CounterDelta(prev.Bytes, cur.Bytes), Sessions: map[string]float64{}, Faults: map[string]float64{}}
+	for k, v := range cur.Sessions {
+		d.Sessions[k] = CounterDelta(prev.Sessions[k], v)
+	}
+	for k, v := range cur.Faults {
+		d.Faults[k] = CounterDelta(prev.Faults[k], v)
+	}
+	return d
+}
+
 type counterSample struct {
 	at time.Time
 	c  Counters

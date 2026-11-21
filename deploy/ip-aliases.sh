@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+# The ip command; overridable so tests can use a fake.
+IPROUTE=${IPROUTE:-ip}
+
 usage() {
     cat <<EOF >&2
 Usage: $0 --interface IFACE --base-ip IP --count N [--remove] [--dry-run]
@@ -62,7 +65,7 @@ if [[ $DRYRUN -eq 0 && $EUID -ne 0 ]]; then
     exit 2
 fi
 
-if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+if ! "$IPROUTE" link show "$INTERFACE" >/dev/null 2>&1; then
     echo "error: interface '$INTERFACE' not found" >&2
     exit 3
 fi
@@ -82,7 +85,7 @@ for part in "$a" "$b" "$c" "$d"; do
 done
 
 # Existing addresses on the interface — used for idempotency.
-existing=$(ip -o addr show dev "$INTERFACE" | awk '{print $4}' | cut -d/ -f1 | sort -u)
+existing=$("$IPROUTE" -o addr show dev "$INTERFACE" | awk '{print $4}' | cut -d/ -f1 | sort -u)
 
 batchfile=$(mktemp)
 trap 'rm -f "$batchfile"' EXIT
@@ -139,5 +142,5 @@ if [[ ! -s "$batchfile" ]]; then
     exit 0
 fi
 
-ip -batch "$batchfile"
+"$IPROUTE" -batch "$batchfile"
 echo "done"

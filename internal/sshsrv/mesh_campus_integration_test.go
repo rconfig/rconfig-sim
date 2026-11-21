@@ -19,8 +19,9 @@ import (
 const meshCampusDir = "../../scenarios/mesh-campus"
 
 // meshCampusServer serves scenarios/mesh-campus with --commands-root on free loopback ports.
-// The checked-in manifest targets the lab (10.1.1.2, fixed ports, absolute config paths), so
-// a copy is written with the ip, port and config_file columns overridden; hostnames and
+// The checked-in manifest targets the lab (10.1.1.2, fixed ports), and its config paths are
+// relative to it, so a copy written elsewhere overrides the ip, port and config_file
+// columns (the last made absolute); hostnames and
 // templates are used as checked in. Returns hostname -> port.
 func meshCampusServer(t *testing.T) map[string]int {
 	t.Helper()

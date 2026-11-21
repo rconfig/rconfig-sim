@@ -1,0 +1,34 @@
+{
+  "name": "Optical: three-vendor mix",
+  "description": "5,000 TL1 gateways: Ciena 6500 (2,000), Infinera DTN-X (1,500) and Cisco ONS 15454 (1,500), each with its remote nodes.",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 11,
+      "families": {
+        "optical": {
+          "models": {
+            "ciena-6500-tl1-gne": 2000,
+            "infinera-dtnx-tl1": 1500,
+            "cisco-ons15454-tl1": 1500
+          },
+          "ssh_auth": "driver"
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 500,
+    "active_devices": "all"
+  }
+}

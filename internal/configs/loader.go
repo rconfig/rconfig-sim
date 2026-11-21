@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"golang.org/x/sys/unix"
@@ -28,7 +29,10 @@ type Device struct {
 }
 
 // LoadForListener reads the generator's manifest, selects rows matching the
-// listener's IP and port range, and mmaps each config file read-only.
+// listener's IP and port range, and mmaps each config file read-only. A
+// relative config_file is relative to the manifest's own directory, so a
+// manifest and its configs can move together and load from any working
+// directory.
 // On any mmap error, previously-mapped devices are unmapped so no leak occurs.
 func LoadForListener(manifestPath, listenIP string, portStart, portCount int) ([]*Device, error) {
 	f, err := os.Open(manifestPath)
@@ -75,7 +79,7 @@ func LoadForListener(manifestPath, listenIP string, portStart, portCount int) ([
 			Port:         port,
 			Vendor:       row[3],
 			Driver:       row[4],
-			ConfigPath:   row[8],
+			ConfigPath:   ResolveConfigPath(manifestPath, row[8]),
 			SizeBucket:   row[9],
 			SerialNumber: serialFor(row[0]),
 			Profile:      profile,
@@ -92,6 +96,15 @@ func LoadForListener(manifestPath, listenIP string, portStart, portCount int) ([
 		d.Size = size
 	}
 	return devices, nil
+}
+
+// ResolveConfigPath is where a manifest's config_file points: as given
+// when absolute, else relative to the manifest's directory.
+func ResolveConfigPath(manifestPath, configFile string) string {
+	if configFile == "" || filepath.IsAbs(configFile) {
+		return configFile
+	}
+	return filepath.Join(filepath.Dir(manifestPath), configFile)
 }
 
 // UnloadAll releases every mmap held by the given devices. Safe to call multiple times.

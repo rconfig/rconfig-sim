@@ -1,0 +1,34 @@
+{
+  "name": "Scenario 3: small lab",
+  "description": "500 Cisco IOS devices, production service shape (TEST-SCENARIOS.md scenario 3).",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 3,
+      "families": {
+        "ip": {
+          "models": {
+            "sm": 200,
+            "md": 200,
+            "lg": 75,
+            "xl": 25
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 100,
+    "active_devices": "all"
+  }
+}

@@ -8,9 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Breaking
 
-- The `rcfg-sim@.service` unit now defaults `HOST_KEY` to `/opt/rcfg-sim/host-keys/<IP>.key` and can no longer read `/etc/rcfg-sim`. Instances that kept their key there will generate a new one (and SSH clients will see a changed host key) unless you move it first.
+- The `rcfg-sim@.service` unit now defaults `HOST_KEY` to `/opt/rcfg-sim/host-keys/<IP>.key`, and `make install` makes `/etc/rcfg-sim` `root:rcfgsim-ui` mode `2770`, so the device processes can no longer read it. Instances that kept their host key in `/etc/rcfg-sim` will generate a new one (and SSH clients will see a changed host key) unless you move it first.
+- A relative `config_file` in a manifest is now relative to the manifest's own directory, not to the directory `rcfg-sim` runs from, so a manifest and its configs load from anywhere. Manifests with absolute paths, which `rcfg-sim-gen` writes for an absolute `--output-dir`, are unaffected.
 
 #### Migration
+
+Host keys, if any instance kept its key in `/etc/rcfg-sim`:
 
 ```bash
 sudo install -d -m 0700 -o rcfgsim -g rcfgsim /opt/rcfg-sim/host-keys
@@ -27,21 +30,30 @@ done
 sudo make install && sudo systemctl daemon-reload && sudo systemctl restart 'rcfg-sim@*'
 ```
 
+Manifests with relative `config_file` paths that only worked from the directory `rcfg-sim` was started in (for example made with a relative `--output-dir`): make the paths absolute from that directory (the one-liner assumes no field contains a comma).
+
+```bash
+cd <the directory rcfg-sim was started from>
+awk -F, -v OFS=, -v d="$PWD" 'NR>1 && $9 !~ /^\// {$9 = d "/" $9} 1' manifest.csv > manifest.abs.csv && mv manifest.abs.csv manifest.csv
+```
+
 ### Added
 
 - Device profiles (`hang`, `latency`, `refuse`, `disconnect`) give chosen devices the same misbehaviour on every run. Assign them to a share of the fleet with `--device-profiles` and `--profile-seed`, or pin one device with a new optional `profile` manifest column. See [Device profiles](README.md#device-profiles).
 - `--fault-rates` sets a separate probability for each fault type, e.g. `auth_fail=0.02,disconnect_mid=0.005`.
 - `--active-devices` limits how many devices accept sessions, and `--max-session` (default `5m`) sets how long a session may last.
+- `--allow-empty` lets an instance with no devices in the manifest start and idle (health check and admin API up, no SSH listeners) instead of exiting. It is off by default, in the systemd unit too (`ALLOW_EMPTY=false`); `make setup` and the web UI turn it on for the instances they manage, so an instance a scenario leaves without devices no longer fails and restarts in a loop.
 - The systemd unit passes the new flags through env variables, and every variable now falls back to the flag's default when left out.
-- An optional admin API (`--admin`) lets you change faults, profiles, delays and active devices at runtime and watch live activity. It has no authentication, so keep `--metrics-addr` on loopback. See [Admin API](README.md#admin-api).
-- New optional web UI, `rcfg-sim-ui`, with a single-user login. It has Fleet, Failures, Build and Activity screens for controlling instances, setting up faults, regenerating the fleet and watching live traffic. Install it with `make install-ui`; see [Web UI](README.md#web-ui).
+- An optional admin API (`--admin-addr`, env `ADMIN_ADDR`) lets you change faults, profiles, delays and active devices at runtime and watch live activity. It has no authentication, so it only listens on a loopback address. See [Admin API](README.md#admin-api).
+- New optional web UI, `rcfg-sim-ui`, with a single-user login, for controlling instances, setting up faults, regenerating the fleet, watching live traffic, building testbenches for enterprise IP, optical (TL1) or mixed fleets in a guided flow with a record of every run, running curated topology scenarios such as mesh-campus (add your own with `--scenarios-dir`), and listing every device with its status, a Test login and CSV or JSON export (also with `curl -u`). Install it with `make install-ui`; see [Web UI](README.md#web-ui), [Testbenches](README.md#testbenches), [Scenario packages](README.md#scenario-packages) and [Devices](README.md#devices).
+- `rcfg-sim-gen --counts` generates exactly the devices you ask for per model instead of percentages, and `rcfg-sim-gen catalogue --json` lists the device families, models, their options and the drivers. `--distribution` output is unchanged. See [rcfg-sim-gen](README.md#rcfg-sim-gen).
+- `sudo make setup` sets up a fresh host in one step: users, install, IP aliases, env files, a first build and the UI with a login, with metrics on loopback unless you set `METRICS_BIND`. See [One-step setup](README.md#one-step-setup).
 - `make adopt-data` moves an existing install's configs and manifest into the versioned `data/` layout used by the Build screen.
 
 ### Changed
 
 - Building from source now needs Go 1.26 or later.
 - A `hang` device's session cap is extended by the length of its hang, so long hangs are no longer cut short.
-- `make install` gives `/etc/rcfg-sim` to group `rcfgsim-ui` so the web UI can edit env files.
 
 ## [0.0.5] — 2026-09-27
 

@@ -1,0 +1,45 @@
+{
+  "name": "Service provider mix",
+  "description": "50,000 devices: 44,000 Cisco IOS (40/40/15/5) and 6,000 TL1 gateways across Ciena, Infinera and Cisco ONS, as an ISP runs both.",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 12,
+      "families": {
+        "ip": {
+          "models": {
+            "sm": 17600,
+            "md": 17600,
+            "lg": 6600,
+            "xl": 2200
+          }
+        },
+        "optical": {
+          "models": {
+            "ciena-6500-tl1-gne": 3000,
+            "infinera-dtnx-tl1": 1500,
+            "cisco-ons15454-tl1": 1500
+          },
+          "ssh_auth": "driver",
+          "options": {
+            "rne_dual_home_pct": 30
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 5000,
+    "active_devices": "all"
+  }
+}

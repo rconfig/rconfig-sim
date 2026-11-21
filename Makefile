@@ -34,6 +34,18 @@ TAILWIND := $(TOOLS_DIR)/tailwindcss-$(TAILWIND_VERSION)-$(TW_PLATFORM)
 TEMPL    := go run github.com/a-h/templ/cmd/templ@$(TEMPL_VERSION)
 SHA256   := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
 
+# Host-changing commands used by install, install-ui, etc-perms and setup.
+# Overridable so tests can replace every one with a fake that only records
+# its calls (docs/UI-ARCHITECTURE.md, Phase 6).
+SYSTEMCTL     ?= systemctl
+GROUPADD      ?= groupadd
+USERADD       ?= useradd
+CHOWN         ?= chown
+GETENT        ?= getent
+ID            ?= id
+SYSCTL        ?= sysctl
+IPROUTE       ?= ip
+
 # Defaults for generate-configs; override with `make generate-configs COUNT=100`.
 COUNT         ?= 50000
 OUTPUT_DIR    ?= $(PREFIX)/configs
@@ -47,7 +59,7 @@ IP_COUNT      ?= 20
 
 .PHONY: all build test vet fmt install uninstall clean \
         generate-configs deploy-aliases remove-aliases integration bench \
-        ui-gen ui-check install-ui uninstall-ui etc-perms adopt-data
+        ui-gen ui-check install-ui uninstall-ui etc-perms adopt-data setup
 
 all: build
 
@@ -77,7 +89,7 @@ fmt:
 # rcfgsim user, generate any configs, enable units, or apply sysctl —
 # operators drive those explicitly so there are no surprises.
 install: build
-	@[ "$$(id -u)" -eq 0 ] || { echo "install requires root (try: sudo make install)"; exit 1; }
+	@[ "$$($(ID) -u)" -eq 0 ] || { echo "install requires root (try: sudo make install)"; exit 1; }
 	install -d $(PREFIX)/bin
 	@# Skip copies when src and dst resolve to the same file (happens when
 	@# the repo is cloned into $(PREFIX) directly; binaries are already in place).
@@ -107,9 +119,9 @@ install: build
 	@# Idempotent: install -d no-ops if the directory already exists with the
 	@# right mode. chown is run every time so it self-heals after
 	@# accidental ownership changes.
-	install -d -m 0700 -o rcfgsim -g rcfgsim $(PREFIX)/host-keys 2>/dev/null || install -d -m 0700 $(PREFIX)/host-keys
-	@if id -u rcfgsim >/dev/null 2>&1; then chown rcfgsim:rcfgsim $(PREFIX)/host-keys; fi
-	systemctl daemon-reload
+	install -d -m 0700 $(PREFIX)/host-keys
+	@if $(ID) -u rcfgsim >/dev/null 2>&1; then echo "$(CHOWN) rcfgsim:rcfgsim $(PREFIX)/host-keys"; $(CHOWN) rcfgsim:rcfgsim $(PREFIX)/host-keys; fi
+	$(SYSTEMCTL) daemon-reload
 	@echo
 	@echo "install complete. Next:"
 	@echo "  1. sudo useradd -r -s /sbin/nologin rcfgsim      (if not already present)"
@@ -125,48 +137,50 @@ install: build
 # processes (rcfgsim) need, and get, no access. Creates the group if missing;
 # installs without the UI just leave it unused. Idempotent.
 etc-perms:
-	@[ "$$(id -u)" -eq 0 ] || { echo "etc-perms requires root"; exit 1; }
-	getent group $(UI_GROUP) >/dev/null || groupadd -r $(UI_GROUP)
-	install -d -m 2770 -o root -g $(UI_GROUP) $(ETC_DIR)
-	chown root:$(UI_GROUP) $(ETC_DIR)
+	@[ "$$($(ID) -u)" -eq 0 ] || { echo "etc-perms requires root"; exit 1; }
+	$(GETENT) group $(UI_GROUP) >/dev/null || $(GROUPADD) -r $(UI_GROUP)
+	install -d -m 2770 $(ETC_DIR)
+	$(CHOWN) root:$(UI_GROUP) $(ETC_DIR)
 	chmod 2770 $(ETC_DIR)
-	find $(ETC_DIR) -maxdepth 1 -type f -name '*.env' -exec chgrp $(UI_GROUP) {} + -exec chmod 0660 {} +
+	find $(ETC_DIR) -maxdepth 1 -type f -name '*.env' -exec $(CHOWN) :$(UI_GROUP) {} + -exec chmod 0660 {} +
 
 # uninstall stops + disables every active rcfg-sim@ instance, then removes
 # the binaries, unit, sysctl, and limits files. Leaves /opt/rcfg-sim/configs,
 # $(ETC_DIR)/*.env, and the rcfgsim user in place — those hold operator
 # state and should survive a reinstall.
 uninstall:
-	@[ "$$(id -u)" -eq 0 ] || { echo "uninstall requires root"; exit 1; }
-	-systemctl list-units --state=active 'rcfg-sim@*' --no-legend --no-pager 2>/dev/null | awk '{print $$1}' | xargs -r systemctl stop
-	-systemctl list-unit-files 'rcfg-sim@*' --no-legend --no-pager 2>/dev/null | awk '{print $$1}' | xargs -r systemctl disable
+	@[ "$$($(ID) -u)" -eq 0 ] || { echo "uninstall requires root"; exit 1; }
+	-$(SYSTEMCTL) list-units --state=active 'rcfg-sim@*' --no-legend --no-pager 2>/dev/null | awk '{print $$1}' | xargs -r $(SYSTEMCTL) stop
+	-$(SYSTEMCTL) list-unit-files 'rcfg-sim@*' --no-legend --no-pager 2>/dev/null | awk '{print $$1}' | xargs -r $(SYSTEMCTL) disable
 	rm -f $(SYSTEMD_DIR)/rcfg-sim@.service
 	rm -f $(SYSCTL_DIR)/99-rcfg-sim.conf
 	rm -f $(LIMITS_DIR)/rcfg-sim.conf
 	rm -f $(PREFIX)/bin/rcfg-sim
 	rm -f $(PREFIX)/bin/rcfg-sim-gen
-	systemctl daemon-reload
+	$(SYSTEMCTL) daemon-reload
 	@echo "uninstall complete. $(PREFIX)/configs, $(ETC_DIR), and the rcfgsim user were left in place."
 
 # install-ui installs the web UI controller: the rcfgsim-ui user, binary,
 # unit, polkit rule and a sample env file. Not part of `make install`, and
 # never enables or starts the unit.
 install-ui: build
-	@[ "$$(id -u)" -eq 0 ] || { echo "install-ui requires root (try: sudo make install-ui)"; exit 1; }
-	getent group $(UI_GROUP) >/dev/null || groupadd -r $(UI_GROUP)
-	id -u rcfgsim-ui >/dev/null 2>&1 || useradd -r -g $(UI_GROUP) -s /sbin/nologin -d /var/lib/rcfg-sim-ui rcfgsim-ui
+	@[ "$$($(ID) -u)" -eq 0 ] || { echo "install-ui requires root (try: sudo make install-ui)"; exit 1; }
+	$(GETENT) group $(UI_GROUP) >/dev/null || $(GROUPADD) -r $(UI_GROUP)
+	$(ID) -u rcfgsim-ui >/dev/null 2>&1 || $(USERADD) -r -g $(UI_GROUP) -s /sbin/nologin -d /var/lib/rcfg-sim-ui rcfgsim-ui
 	install -d $(PREFIX)/bin
 	install -m 0755 $(BIN_DIR)/rcfg-sim-ui $(PREFIX)/bin/rcfg-sim-ui
 	install -m 0644 deploy/systemd/rcfg-sim-ui.service $(SYSTEMD_DIR)/rcfg-sim-ui.service
 	install -d -m 0755 $(POLKIT_DIR)
 	install -m 0644 deploy/polkit/50-rcfg-sim-ui.rules $(POLKIT_DIR)/50-rcfg-sim-ui.rules
 	$(MAKE) --no-print-directory etc-perms
-	install -d -m 0750 -o root -g $(UI_GROUP) $(UI_ETC_DIR)
-	@[ -e $(UI_ETC_DIR)/rcfg-sim-ui.env ] || install -m 0640 -o root -g $(UI_GROUP) deploy/systemd/rcfg-sim-ui.env.sample $(UI_ETC_DIR)/rcfg-sim-ui.env
-	systemctl daemon-reload
+	install -d -m 0750 $(UI_ETC_DIR)
+	$(CHOWN) root:$(UI_GROUP) $(UI_ETC_DIR)
+	@[ -e $(UI_ETC_DIR)/rcfg-sim-ui.env ] || { install -m 0640 deploy/systemd/rcfg-sim-ui.env.sample $(UI_ETC_DIR)/rcfg-sim-ui.env && \
+		$(CHOWN) root:$(UI_GROUP) $(UI_ETC_DIR)/rcfg-sim-ui.env; }
+	$(SYSTEMCTL) daemon-reload
 	@echo
 	@echo "install-ui complete. Next:"
-	@echo "  1. Set ADMIN=true and METRICS_ADDR=127.0.0.1:<port> in each $(ETC_DIR)/<IP>.env, then restart those instances"
+	@echo "  1. Set ADMIN_ADDR=127.0.0.1:<port> (a different port per instance) in each $(ETC_DIR)/<IP>.env, then restart those instances"
 	@echo "  2. $(PREFIX)/bin/rcfg-sim-ui hash-password, then put UI_USERNAME and UI_PASSWORD_HASH in $(UI_ETC_DIR)/rcfg-sim-ui.env"
 	@echo "  3. sudo systemctl enable --now rcfg-sim-ui"
 	@echo "  4. ssh -L 8080:127.0.0.1:8080 <this host>, then open http://127.0.0.1:8080/"
@@ -175,15 +189,29 @@ install-ui: build
 # Build screen needs (docs/UI-ARCHITECTURE.md 7.5). One-off; refuses if
 # already adopted. Restart the instances afterwards.
 adopt-data:
-	@[ "$$(id -u)" -eq 0 ] || { echo "adopt-data requires root (try: sudo make adopt-data)"; exit 1; }
+	@[ "$$($(ID) -u)" -eq 0 ] || { echo "adopt-data requires root (try: sudo make adopt-data)"; exit 1; }
 	bash deploy/adopt-data.sh --data-dir $(PREFIX)/data --manifest $(MANIFEST) --configs-dir $(OUTPUT_DIR) --env-dir $(ETC_DIR) --group $(UI_GROUP)
 
 uninstall-ui:
-	@[ "$$(id -u)" -eq 0 ] || { echo "uninstall-ui requires root"; exit 1; }
-	-systemctl disable --now rcfg-sim-ui.service
+	@[ "$$($(ID) -u)" -eq 0 ] || { echo "uninstall-ui requires root"; exit 1; }
+	-$(SYSTEMCTL) disable --now rcfg-sim-ui.service
 	rm -f $(SYSTEMD_DIR)/rcfg-sim-ui.service $(POLKIT_DIR)/50-rcfg-sim-ui.rules $(PREFIX)/bin/rcfg-sim-ui
-	systemctl daemon-reload
+	$(SYSTEMCTL) daemon-reload
 	@echo "uninstall-ui complete. $(UI_ETC_DIR), /var/lib/rcfg-sim-ui and the rcfgsim-ui user were left in place."
+
+# setup is the one-step install on a vanilla host (deploy/setup.sh): users,
+# make install and install-ui, sysctl, persistent IP aliases, env files, a
+# first build, the UI login, and every unit enabled and started. Takes IPS,
+# BASE_IP, DEVICES_PER_IP, PORT_START and optional DEVICES, INTERFACE,
+# UI_USER, UI_PASSWORD. SETUP_FLAGS=--dry-run prints the steps; --force takes
+# over env files it did not write. Idempotent.
+setup:
+	PREFIX=$(PREFIX) SYSTEMD_DIR=$(SYSTEMD_DIR) SYSCTL_DIR=$(SYSCTL_DIR) LIMITS_DIR=$(LIMITS_DIR) \
+	ETC_DIR=$(ETC_DIR) UI_ETC_DIR=$(UI_ETC_DIR) POLKIT_DIR=$(POLKIT_DIR) UI_GROUP=$(UI_GROUP) BIN_DIR=$(BIN_DIR) \
+	BASE_IP=$(BASE_IP) $(if $(INTERFACE),INTERFACE=$(INTERFACE)) MAKE="$(MAKE)" \
+	SYSTEMCTL="$(SYSTEMCTL)" GROUPADD="$(GROUPADD)" USERADD="$(USERADD)" CHOWN="$(CHOWN)" GETENT="$(GETENT)" \
+	ID="$(ID)" SYSCTL="$(SYSCTL)" IPROUTE="$(IPROUTE)" \
+	bash deploy/setup.sh $(SETUP_FLAGS)
 
 # --- Web UI generated files (committed; docs/UI-ARCHITECTURE.md D8) ---
 
@@ -224,11 +252,11 @@ generate-configs: build
 #   IP_COUNT=20
 deploy-aliases:
 	@[ -n "$(INTERFACE)" ] || { echo "INTERFACE=<iface> required (see 'ip link')"; exit 1; }
-	bash deploy/ip-aliases.sh --interface "$(INTERFACE)" --base-ip "$(BASE_IP)" --count $(IP_COUNT)
+	IPROUTE="$(IPROUTE)" bash deploy/ip-aliases.sh --interface "$(INTERFACE)" --base-ip "$(BASE_IP)" --count $(IP_COUNT)
 
 remove-aliases:
 	@[ -n "$(INTERFACE)" ] || { echo "INTERFACE=<iface> required"; exit 1; }
-	bash deploy/ip-aliases.sh --interface "$(INTERFACE)" --base-ip "$(BASE_IP)" --count $(IP_COUNT) --remove
+	IPROUTE="$(IPROUTE)" bash deploy/ip-aliases.sh --interface "$(INTERFACE)" --base-ip "$(BASE_IP)" --count $(IP_COUNT) --remove
 
 clean:
 	rm -rf $(BIN_DIR)

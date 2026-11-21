@@ -4,6 +4,7 @@ import (
 	"net/url"
 
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/presets"
+	ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
 )
 
 // FailuresPage is the Failures screen (10.2). Nothing applies until Apply.
@@ -13,26 +14,36 @@ templ FailuresPage(p Page, m FailuresModel) {
 			<h1 class="text-2xl">Failures</h1>
 			<p class="text-muted">The same faults and profiles go to every instance. Changes apply to new sessions.</p>
 		</div>
-		if m.NoneUp {
-			<p class="mt-4 rounded-card border border-st-auth bg-panel px-4 py-3">No instance is up, so nothing can be applied. The form shows defaults.</p>
-		} else if m.Mixed {
-			<p class="mt-4 rounded-card border border-st-auth bg-panel px-4 py-3">Instances differ in faults or profiles. The form shows the first instance; Apply makes them all match it.</p>
-		}
-		if m.Loaded != "" {
-			<p class="mt-4 rounded-card border border-line bg-tint px-4 py-3">Preset <span class="font-semibold">{ m.Loaded }</span> loaded into the form. Review it, then Apply.</p>
-		}
+		<div class="mt-4">
+			if m.NoneUp {
+				@ui.Toast(ui.ToastWarn, "No instance is up, so nothing can be applied. The form shows defaults.", nil)
+			} else if m.Mixed {
+				@ui.Toast(ui.ToastWarn, "Instances differ in faults or profiles. The form shows the first instance; Apply makes them all match it.", nil)
+			}
+			if m.Loaded != "" {
+				@ui.Toast(ui.ToastOK, "Preset "+m.Loaded+" loaded into the form. Review it, then Apply.", nil)
+			}
+		</div>
 		<div class="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
 			<form id="failures-form" hx-post="/failures/apply" hx-target="#flash" class="flex flex-col gap-6">
 				@pendingWatch("/pending/failures", "failures-form")
 				@faultsPanel(m)
 				@profilesPanel(m)
-				<div class="flex flex-wrap items-center gap-3">
-					<button type="submit" class="rounded-md bg-accent-600 px-4 py-2 font-medium text-white hover:bg-accent-700">Apply to fleet</button>
-					<span class="mx-1 h-6 border-l border-line"></span>
-					<label for="preset-name" class="text-muted">Save as preset</label>
-					<input id="preset-name" name="preset_name" type="text" maxlength="64" placeholder="Name" class="w-48 rounded-md border border-line bg-bg px-2 py-1"/>
-					<button type="button" hx-post="/presets/save" hx-include="#failures-form" hx-target="#flash" class="rounded-md border border-line px-3 py-1.5 hover:bg-tint">Save</button>
-				</div>
+				@ui.Advanced(0) {
+					@ui.Field("Save these settings as a preset", "Saved presets can be loaded here or into a testbench, and applied in one click.") {
+						<span class="flex flex-wrap items-center gap-2">
+							@ui.Input(templ.Attributes{"id": "preset-name", "name": "preset_name", "type": "text", "maxlength": "64", "placeholder": "Name", "class": "w-48"})
+							@ui.Button(ui.Secondary, "", templ.Attributes{"hx-post": "/presets/save", "hx-include": "#failures-form", "hx-target": "#flash"}) {
+								Save preset
+							}
+						</span>
+					}
+				}
+				@ui.Actions("Sends these faults and profiles to every instance that is up and saves them to the env files; down instances get them on their next start.") {
+					@ui.Submit(ui.Primary, nil) {
+						Apply to fleet
+					}
+				}
 			</form>
 			<div class="flex flex-col gap-6">
 				@panel("Who is affected", "The devices these rules and this seed pick, the same ones rcfg-sim picks. Manifest-pinned devices are included.") {
@@ -52,25 +63,18 @@ templ faultsPanel(m FailuresModel) {
 	@panel("Fault rates", "Probability per event, per type. Each event rolls independently.") {
 		<div class="flex flex-col gap-4">
 			for _, f := range m.Faults {
-				<div class="grid items-center gap-x-3 gap-y-1 sm:grid-cols-[12rem_minmax(0,1fr)_7rem]">
-					<div>
-						<label for={ "pct-" + f.Type } class="font-medium">{ f.Label }</label>
-						<p class="num text-xs text-muted">{ f.Type }</p>
-					</div>
-					<input type="range" id={ "range-" + f.Type } min="0" max={ rangeMax(f.Pct) } data-default-max="10" step="0.1" value={ pctStr(f.Pct) } data-sync={ "pct-" + f.Type } aria-label={ f.Label + " percent" }/>
-					<div class="flex items-center gap-1">
-						<input id={ "pct-" + f.Type } name={ "pct_" + f.Type } type="number" min="0" max="100" step="any" value={ pctStr(f.Pct) } class="num w-20 rounded-md border border-line bg-bg px-2 py-1"/>
-						<span class="text-muted">%</span>
-					</div>
-					<p class="text-xs text-muted sm:col-start-2 sm:col-span-2">
-						{ f.Help }. About <span class="num text-fg" data-estimate={ "pct-" + f.Type } data-devices={ itoa(m.Devices) }>{ estimate(m.Devices, f.Pct) }</span> events per full poll of the fleet.
+				<div class="flex flex-col gap-1">
+					@ui.Field(f.Label, f.Help+". Flag name: "+f.Type+".") {
+						@ui.Slider("pct-"+f.Type, "pct_"+f.Type, "%", "0", rangeMax(f.Pct), "0.1", pctStr(f.Pct),
+							templ.Attributes{"max": "100", "step": "any"},
+							templ.Attributes{"id": "range-" + f.Type, "data-default-max": "10"})
+					}
+					<p class="field-hint">
+						About <span class="num text-fg" data-estimate={ "pct-" + f.Type } data-devices={ itoa(m.Devices) }>{ estimate(m.Devices, f.Pct) }</span> events per full poll of the fleet.
 					</p>
 				</div>
 			}
-			<label class="flex items-center gap-2 text-muted">
-				<input type="checkbox" data-extend={ rangeIDs() } checked?={ anyOver10(m.Faults) }/>
-				Allow sliders up to 100%
-			</label>
+			@ui.Checkbox("Allow sliders up to 100%", anyOver10(m.Faults), templ.Attributes{"data-extend": rangeIDs()})
 		</div>
 	}
 }
@@ -87,13 +91,14 @@ templ profilesPanel(m FailuresModel) {
 				}
 			</div>
 			<div>
-				<button type="button" hx-get="/failures/rule-row" hx-target="#rules" hx-swap="beforeend" class="rounded-md border border-line px-3 py-1.5 hover:bg-tint">Add rule</button>
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-get": "/failures/rule-row", "hx-target": "#rules", "hx-swap": "beforeend"}) {
+					Add rule
+				}
 			</div>
 			<p class="text-xs text-muted">Parameters: <span class="num">hang</span> a duration (<span class="num">3600s</span>), <span class="num">latency</span> a range (<span class="num">200-800ms</span>), none for <span class="num">refuse</span> and <span class="num">disconnect</span>. Shares add up to at most 100%.</p>
-			<div class="flex items-center gap-3">
-				<label for="seed" class="text-muted">Seed</label>
-				<input id="seed" name="seed" type="number" step="1" value={ i64(m.Seed) } class="num w-32 rounded-md border border-line bg-bg px-2 py-1"/>
-			</div>
+			@ui.Field("Seed", "Picks which devices get each profile. The same seed picks the same devices every run (flag --profile-seed).") {
+				@ui.NumberInput(templ.Attributes{"id": "seed", "name": "seed", "step": "1", "value": i64(m.Seed), "class": "w-32"})
+			}
 		</div>
 	}
 }
@@ -101,17 +106,15 @@ templ profilesPanel(m FailuresModel) {
 // RuleRowView is one row of the profile rule editor.
 templ RuleRowView(r RuleRow) {
 	<div data-row class="grid items-center gap-3 sm:grid-cols-[9rem_minmax(0,1fr)_7rem_2rem]">
-		<select name="rule_kind" aria-label="Profile" class="rounded-md border border-line bg-bg px-2 py-1">
-			for _, k := range RuleKinds {
-				<option value={ k } selected?={ k == r.Kind }>{ k }</option>
-			}
-		</select>
-		<input name="rule_param" type="text" value={ r.Param } placeholder="3600s or 200-800ms" aria-label="Parameters" class="num rounded-md border border-line bg-bg px-2 py-1"/>
+		@ui.Select("rule_kind", r.Kind, ruleKindOptions(), templ.Attributes{"aria-label": "Profile"})
+		@ui.Input(templ.Attributes{"name": "rule_param", "type": "text", "value": r.Param, "placeholder": "3600s or 200-800ms", "aria-label": "Parameters", "class": "num"})
 		<div class="flex items-center gap-1">
-			<input name="rule_pct" type="number" min="0" max="100" step="any" value={ r.Pct } aria-label="Share of the fleet, percent" class="num w-20 rounded-md border border-line bg-bg px-2 py-1"/>
+			@ui.NumberInput(templ.Attributes{"name": "rule_pct", "min": "0", "max": "100", "step": "any", "value": r.Pct, "aria-label": "Share of the fleet, percent", "class": "w-20"})
 			<span class="text-muted">%</span>
 		</div>
-		<button type="button" data-remove-row aria-label="Remove rule" class="rounded-md border border-line px-2 py-1 hover:bg-tint">×</button>
+		@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"data-remove-row": true, "aria-label": "Remove rule"}) {
+			×
+		}
 	</div>
 }
 
@@ -123,21 +126,25 @@ templ AffectedList(m AffectedModel) {
 	<p>
 		<span class="num font-semibold">{ itoa(len(m.Items)) }</span> devices affected
 		for _, c := range m.ByProfile {
-			<span class="ml-2 rounded-full border border-line px-2 py-0.5 text-xs"><span class="num">{ c.Profile }</span> × <span class="num">{ itoa(c.N) }</span></span>
+			@ui.Pill("neutral", templ.Attributes{"class": "ml-2"}) {
+				{ c.Profile } × { itoa(c.N) }
+			}
 		}
 	</p>
 	if len(m.Items) > 0 {
 		<div class="mt-3 flex items-center gap-2">
-			<button type="button" data-copy="affected-list" class="rounded-md border border-line px-3 py-1 text-xs hover:bg-tint">Copy hostnames</button>
+			@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"data-copy": "affected-list"}) {
+				Copy hostnames
+			}
 			if m.Shown < len(m.Items) {
 				<span class="text-xs text-muted">Copies the first { itoa(m.Shown) }.</span>
 			}
 		</div>
-		<pre id="affected-list" class="num mt-2 max-h-80 overflow-auto rounded-md border border-line bg-bg p-3 text-xs">
+		@ui.Code(templ.Attributes{"id": "affected-list", "class": "mt-2 max-h-80"}) {
 			for _, a := range m.Items[:m.Shown] {
 				{ a.Host + "\n" }
 			}
-		</pre>
+		}
 		<details class="mt-2 text-xs text-muted">
 			<summary class="cursor-pointer">With addresses and profiles</summary>
 			<table class="num mt-2 w-full">
@@ -163,13 +170,19 @@ templ PresetList(ps []presets.Preset) {
 			<li class="flex flex-wrap items-center gap-2 py-2">
 				<span class="font-medium">{ p.Name }</span>
 				if p.BuiltIn {
-					<span class="rounded-full border border-line px-2 text-xs text-muted">built-in</span>
+					@ui.Badge(ui.BadgeMuted, "built-in, read-only")
 				}
 				<span class="ml-auto flex gap-2">
-					<a href={ templ.SafeURL("/failures?preset=" + url.QueryEscape(p.Name)) } class="rounded-md border border-line px-2.5 py-1 text-xs no-underline hover:bg-tint">Load</a>
-					<button type="button" hx-post="/presets/apply" hx-vals={ templ.JSONString(map[string]string{"name": p.Name}) } hx-target="#flash" hx-confirm={ "Apply preset " + p.Name + " to every instance now?" } class="rounded-md bg-accent-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-700">Apply</button>
+					@ui.LinkButton(ui.Secondary, ui.Small, "/failures?preset="+url.QueryEscape(p.Name), nil) {
+						Load
+					}
+					@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/presets/apply", "hx-vals": presetVals(p.Name), "hx-target": "#flash", "hx-confirm": "Apply preset " + p.Name + " to every instance now?"}) {
+						Apply
+					}
 					if !p.BuiltIn {
-						<button type="button" hx-post="/presets/delete" hx-vals={ templ.JSONString(map[string]string{"name": p.Name}) } hx-target="#flash" hx-confirm={ "Delete preset " + p.Name + "?" } class="rounded-md border border-line px-2.5 py-1 text-xs hover:bg-tint">Delete</button>
+						@ui.ConfirmButton("Delete preset "+p.Name+"?", ui.Small, templ.Attributes{"hx-post": "/presets/delete", "hx-vals": presetVals(p.Name), "hx-target": "#flash"}) {
+							Delete
+						}
 					}
 				</span>
 			</li>

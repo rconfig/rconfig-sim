@@ -1,0 +1,42 @@
+{
+  "name": "Scenario 8: localised faults",
+  "description": "Scenario 5 with 10% auth_fail and slow_response on 10.50.0.3 only (TEST-SCENARIOS.md scenario 8).",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 5,
+      "families": {
+        "ip": {
+          "models": {
+            "sm": 20000,
+            "md": 20000,
+            "lg": 7500,
+            "xl": 2500
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 5000,
+    "active_devices": "all"
+  },
+  "overrides": {
+    "10.50.0.3": {
+      "faults": {
+        "auth_fail": 0.1,
+        "slow_response": 0.1
+      }
+    }
+  }
+}

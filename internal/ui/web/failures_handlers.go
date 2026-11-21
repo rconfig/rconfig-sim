@@ -166,6 +166,7 @@ func (s *Server) applyFailures(w http.ResponseWriter, r *http.Request) {
 	}
 	rs := s.opt.Fleet.ApplyFailures(r.Context(), f.rates, f.seed, f.rules)
 	s.opt.Fleet.Poll(r.Context())
+	s.noteChange(fmt.Sprintf("Faults %s, profiles %s (seed %d)", ratesText(f.rates), rulesText(f.rules), f.seed))
 	s.flash(w, r, true, resultsFlash("Faults and profiles", rs))
 }
 
@@ -251,6 +252,7 @@ func (s *Server) applyPreset(w http.ResponseWriter, r *http.Request) {
 	}
 	rs := s.opt.Fleet.ApplyFailures(r.Context(), p.Faults, p.Profiles.Seed, p.Profiles.Rules)
 	s.opt.Fleet.Poll(r.Context())
+	s.noteChange("Preset " + p.Name + " applied")
 	s.flash(w, r, true, resultsFlash("Preset "+p.Name, rs))
 }
 

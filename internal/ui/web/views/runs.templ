@@ -1,0 +1,219 @@
+package views
+
+import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
+
+// RunsPage is the Runs list (10.6). Tick two runs to compare them.
+templ RunsPage(p Page, m RunsModel) {
+	@Layout(p) {
+		<div class="flex flex-wrap items-baseline justify-between gap-4">
+			<h1 class="text-2xl">Runs</h1>
+			<p class="text-muted">One row per testbench run, newest first.</p>
+		</div>
+		if m.Tag != "" {
+			<p class="mt-4 text-muted">Runs tagged <span class="num text-fg">{ m.Tag }</span> · <a href="/runs">all runs</a></p>
+		}
+		if m.Err != "" {
+			<div class="mt-4">
+				@ui.Toast(ui.ToastError, "Some run files could not be read: "+m.Err, nil)
+			</div>
+		}
+		if len(m.Rows) == 0 {
+			<div class="mt-6">
+				@ui.Empty("No runs yet", "Every start of a testbench is recorded here, with its timeline and totals.") {
+					@ui.LinkButton(ui.Primary, "", "/testbenches", nil) {
+						Go to Testbenches
+					}
+				}
+			</div>
+		} else {
+			<form method="get" action="/runs/compare" class="mt-6 flex flex-col gap-3">
+				@ui.Table(nil) {
+					<thead>
+						<tr>
+							<th><span class="sr-only">Compare</span></th>
+							<th>Testbench</th>
+							<th>Started</th>
+							<th>Ended</th>
+							<th>Duration</th>
+							<th>How it ended</th>
+							<th class="text-right">Sessions</th>
+							<th class="text-right">Faults</th>
+							<th class="text-right">Sent</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range m.Rows {
+							<tr>
+								<td>
+									@ui.Checkbox("", false, templ.Attributes{"name": "id", "value": r.ID, "aria-label": "Compare run " + r.ID})
+								</td>
+								<td>
+									<a href={ templ.SafeURL("/runs/" + r.ID) }>{ r.Name }</a> <span class="num text-muted">v{ itoa(r.Version) }</span>
+									for _, tag := range r.Tags {
+										@ui.PillLink("neutral", "/runs?tag="+urlQuery(tag), templ.Attributes{"class": "ml-1"}) {
+											{ tag }
+										}
+									}
+								</td>
+								<td class="num">{ r.Started }</td>
+								<td class="num">{ orDash(r.Ended) }</td>
+								<td class="num">{ r.Duration }</td>
+								<td class={ outcomeClass(r.Outcome) }>{ r.Outcome }</td>
+								<td class="num text-right">{ r.Sessions }</td>
+								<td class="num text-right">{ r.Faults }</td>
+								<td class="num text-right">{ r.Bytes }</td>
+							</tr>
+						}
+					</tbody>
+				}
+				if len(m.Rows) > 1 {
+					@ui.Actions("Shows the two ticked runs side by side: notes, totals and the settings that differ.") {
+						@ui.Submit(ui.Secondary, nil) {
+							Compare the two ticked
+						}
+					}
+				}
+			</form>
+		}
+	}
+}
+
+// RunPage is one run's detail (10.6).
+templ RunPage(p Page, m RunModel) {
+	@Layout(p) {
+		<div class="flex flex-wrap items-baseline justify-between gap-4">
+			<h1 class="text-2xl">{ m.Row.Name } <span class="num text-sm text-muted">v{ itoa(m.Row.Version) } · run { m.Row.ID }</span></h1>
+			<div class="flex gap-2">
+				@ui.LinkButton(ui.Secondary, "", "/devices?run="+m.Row.ID, nil) {
+					Devices
+				}
+				@ui.LinkButton(ui.Secondary, "", "/runs/"+m.Row.ID+"/export?format=json", templ.Attributes{"download": true}) {
+					Export JSON
+				}
+				@ui.LinkButton(ui.Secondary, "", "/runs/"+m.Row.ID+"/export?format=csv", templ.Attributes{"download": true}) {
+					Export CSV
+				}
+			</div>
+		</div>
+		<dl class="mt-4 grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1">
+			<dt class="text-muted">Started</dt><dd class="num">{ m.Row.Started }</dd>
+			<dt class="text-muted">Ended</dt><dd class="num">{ orDash(m.Row.Ended) }</dd>
+			<dt class="text-muted">Duration</dt><dd class="num">{ m.Row.Duration }</dd>
+			<dt class="text-muted">How it ended</dt><dd class={ outcomeClass(m.Row.Outcome) }>{ m.Row.Outcome }</dd>
+			if m.Reason != "" {
+				<dt class="text-muted">Why</dt><dd>{ m.Reason }</dd>
+			}
+			<dt class="text-muted">Build</dt><dd class="num">{ orDash(m.Build) }</dd>
+		</dl>
+		<div class="mt-4 max-w-3xl">
+			@ui.Card("Notes and tags", "") {
+				<form hx-post={ "/runs/" + m.Row.ID + "/notes" } hx-target="#flash" class="flex flex-col gap-3">
+					@ui.Field("Notes", "Free text kept with the run, for example what was under test.") {
+						@ui.Textarea(m.Notes, templ.Attributes{"name": "notes", "rows": "2", "maxlength": "4000"})
+					}
+					@ui.Field("Tags", "Comma-separated, for example rConfig 8.4.2 build 1203. Click a tag on the Runs list to see every run that has it.") {
+						@ui.Input(templ.Attributes{"name": "tags", "value": m.Tags})
+					}
+					@ui.Actions("") {
+						@ui.Submit(ui.Secondary, nil) {
+							Save notes and tags
+						}
+					}
+				</form>
+			}
+		</div>
+		<div class="mt-6 grid gap-6 xl:grid-cols-2">
+			@panel("Totals", "Counter growth while the run was active, across instance restarts.") {
+				if m.Incomplete {
+					@ui.Toast(ui.ToastWarn, "Incomplete: the UI was not running for part of this run (see ui_gap in the timeline), so traffic in that time is not counted.", nil)
+				}
+				@totalsTable(m.Columns, m.Totals)
+				<h3 class="mt-4 text-sm font-medium">By instance</h3>
+				@totalsTable(m.Columns, m.Instances)
+			}
+			@panel("Timeline", "") {
+				<ol class="flex flex-col gap-1">
+					for _, e := range m.Events {
+						<li class="grid grid-cols-[9rem_6rem_minmax(0,1fr)] gap-2"><span class="num text-muted">{ e.At }</span><span class="text-muted">{ e.Kind }</span><span>{ e.Text }</span></li>
+					}
+				</ol>
+			}
+		</div>
+		<div class="mt-6">
+			@panel("Testbench as started", "") {
+				@ui.Code(nil) {
+					{ m.Snapshot }
+				}
+			}
+		</div>
+	}
+}
+
+templ totalsTable(cols []string, rows []RunTotalsRow) {
+	@ui.Table(nil) {
+		<thead>
+			<tr>
+				<th></th>
+				for _, c := range cols {
+					<th>{ c }</th>
+				}
+			</tr>
+		</thead>
+		<tbody>
+			for _, r := range rows {
+				<tr>
+					<td class="num">{ r.Name }</td>
+					for _, v := range r.Values {
+						<td class="num">{ v }</td>
+					}
+				</tr>
+			}
+		</tbody>
+	}
+}
+
+// ComparePage is two runs side by side (10.6).
+templ ComparePage(p Page, m CompareModel) {
+	@Layout(p) {
+		<div class="flex flex-wrap items-baseline justify-between gap-4">
+			<h1 class="text-2xl">Compare runs</h1>
+			<a href="/runs" class="text-muted">All runs</a>
+		</div>
+		<div class="mt-6 grid gap-6 xl:grid-cols-2">
+			@panel("Notes and tags", "") {
+				@compareTable(m, m.Notes)
+			}
+			@panel("Totals", "") {
+				@compareTable(m, m.Totals)
+			}
+			@panel("Settings that differ", "") {
+				if len(m.Settings) == 0 {
+					<p class="text-muted">The two runs used the same testbench settings.</p>
+				} else {
+					@compareTable(m, m.Settings)
+				}
+			}
+		</div>
+	}
+}
+
+templ compareTable(m CompareModel, rows [][3]string) {
+	@ui.Table(nil) {
+		<thead>
+			<tr>
+				<th></th>
+				<th><a href={ templ.SafeURL("/runs/" + m.A.ID) }>{ m.A.Name } v{ itoa(m.A.Version) }</a> <span class="num">{ m.A.Started }</span></th>
+				<th><a href={ templ.SafeURL("/runs/" + m.B.ID) }>{ m.B.Name } v{ itoa(m.B.Version) }</a> <span class="num">{ m.B.Started }</span></th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, r := range rows {
+				<tr class={ templ.KV("font-semibold", r[1] != r[2]) }>
+					<td>{ r[0] }</td>
+					<td class="num break-all">{ r[1] }</td>
+					<td class="num break-all">{ r[2] }</td>
+				</tr>
+			}
+		</tbody>
+	}
+}

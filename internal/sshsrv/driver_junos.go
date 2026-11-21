@@ -1,6 +1,7 @@
 package sshsrv
 
 import (
+	"github.com/rcfg-sim/rcfg-sim/internal/drivers"
 	"strings"
 	"time"
 )
@@ -17,7 +18,7 @@ type junos struct{}
 func (junos) Name() string { return "junos" }
 
 // RequiresSSHAuth: Junos authenticates at the SSH layer.
-func (junos) RequiresSSHAuth() bool { return true }
+func (junos) RequiresSSHAuth() bool { return drivers.RequiresSSHAuth("junos") }
 
 func (junos) Commands() []string {
 	return []string{

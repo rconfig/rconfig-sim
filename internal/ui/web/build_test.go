@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/catalogue"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/fleet"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/jobs"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/presets"
@@ -41,7 +42,7 @@ func newBuildEnv(t *testing.T, legacy bool) *buildEnv {
 			t.Fatal(err)
 		}
 	}
-	must(os.WriteFile(gen, []byte(uitest.FakeGenScript), 0o755))
+	uitest.WriteFakeGen(t, gen)
 	t.Setenv("FAKE_GEN_ARGS", filepath.Join(tmp, "gen-args"))
 	b0 := filepath.Join(root, "builds", "B0")
 	must(os.MkdirAll(filepath.Join(b0, "configs"), 0o755))
@@ -67,23 +68,25 @@ func newBuildEnv(t *testing.T, legacy bool) *buildEnv {
 	sysctl := &fakeSystemctl{}
 	units := systemd.New("systemctl", sysctl.run)
 	be.runner = jobs.NewRunner(jobs.Options{
-		EnvDir: envDir, GenBin: gen, LogDir: filepath.Join(tmp, "jobs"), Units: units,
+		Catalogue: catalogue.NewSource(gen, nil),
+		EnvDir:    envDir, GenBin: gen, LogDir: filepath.Join(tmp, "jobs"), Units: units,
 		Healthy: func(context.Context, string) error { return nil }, Pause: time.Millisecond,
 		Free: func(string) (int64, error) { be.mu.Lock(); defer be.mu.Unlock(); return be.free, nil },
 	})
 	fl := fleet.New(fleet.Options{EnvDir: envDir})
 	auth := testAuth(t)
-	srv := New(Options{Fleet: fl, Units: units, Presets: presets.NewStore(filepath.Join(tmp, "presets")), Jobs: be.runner, Auth: auth, Poll: time.Second})
+	srv := New(Options{Fleet: fl, Units: units, Presets: presets.NewStore(filepath.Join(tmp, "presets")), Jobs: be.runner, Auth: auth, Poll: time.Second,
+		Catalogue: catalogue.NewSource(gen, nil)})
 	hs := httptest.NewServer(srv)
 	t.Cleanup(func() { srv.Close(); hs.Close(); be.runner.Close() })
 	be.env = &env{t: t, dir: envDir, fleet: fl, sysctl: sysctl, srv: srv, http: hs, auth: auth, session: auth.NewSession()}
 	return be
 }
 
-func buildForm(count, seed string, weights map[string]string) url.Values {
-	f := url.Values{"count": {count}, "seed": {seed}}
-	for k, v := range weights {
-		f.Set("w_"+k, v)
+func buildForm(seed string, counts map[string]string) url.Values {
+	f := url.Values{"seed": {seed}}
+	for k, v := range counts {
+		f.Set("count_"+k, v)
 	}
 	return f
 }
@@ -140,7 +143,7 @@ func TestBuildPageLegacyShowsAdoption(t *testing.T) {
 	if strings.Contains(body, `id="build-form"`) {
 		t.Error("a legacy install must not show the build form")
 	}
-	if body := be.post("/build/run", buildForm("6", "1", map[string]string{"sm": "100"})); !strings.Contains(body, "not adopted") {
+	if body := be.post("/build/run", buildForm("1", map[string]string{"sm": "6"})); !strings.Contains(body, "not adopted") {
 		t.Fatalf("run on a legacy install: %s", body)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(be.root), "gen-args")); !os.IsNotExist(err) {
@@ -151,8 +154,8 @@ func TestBuildPageLegacyShowsAdoption(t *testing.T) {
 func TestBuildPageAndEstimate(t *testing.T) {
 	be := newBuildEnv(t, false)
 	body := be.get("/build")
-	for _, want := range []string{`id="build-form"`, "B0", "Adopted from a pre-UI install", `name="w_sm"`, `name="w_cisco-ons15454-tl1"`,
-		`min="4"`, `max="6"`, "Active devices on the Fleet screen", "No previous build", `hx-post="/build/estimate"`,
+	for _, want := range []string{`id="build-form"`, "B0", "Adopted from a pre-UI install", `name="count_sm"`, `name="count_cisco-ons15454-tl1"`, "Enterprise IP",
+		"must be 4 to 6 on 2 instances", "Active devices on the Fleet screen", "No previous build", `hx-post="/build/estimate"`,
 		"htmx-ext-sse-2.2.4.min.js", `aria-current="page"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("build page missing %q", want)
@@ -162,11 +165,11 @@ func TestBuildPageAndEstimate(t *testing.T) {
 		form url.Values
 		want string
 	}{
-		"ready":     {buildForm("5", "1", map[string]string{"sm": "60", "md": "40"}), "Ready to build"},
-		"too few":   {buildForm("3", "1", map[string]string{"sm": "100"}), "Active devices"},
-		"too many":  {buildForm("8", "1", map[string]string{"sm": "100"}), "ip-aliases.sh --interface &lt;iface&gt; --base-ip 127.0.0.3 --count 1"},
-		"total":     {buildForm("5", "1", map[string]string{"sm": "90"}), "90% of 100%"},
-		"bad count": {buildForm("x", "1", map[string]string{"sm": "100"}), "whole number"},
+		"ready":     {buildForm("1", map[string]string{"sm": "3", "md": "2"}), "Ready to build"},
+		"too few":   {buildForm("1", map[string]string{"sm": "3"}), "Active devices"},
+		"too many":  {buildForm("1", map[string]string{"sm": "8"}), "ip-aliases.sh --interface &lt;iface&gt; --base-ip 127.0.0.3 --count 1"},
+		"total":     {buildForm("1", map[string]string{"sm": "4", "ciena-6500-tl1": "1"}), "5 devices"},
+		"bad count": {buildForm("1", map[string]string{"sm": "x"}), "whole number"},
 	} {
 		if got := be.post("/build/estimate", c.form); !strings.Contains(got, c.want) {
 			t.Errorf("%s: estimate missing %q:\n%s", desc, c.want, got)
@@ -175,20 +178,20 @@ func TestBuildPageAndEstimate(t *testing.T) {
 	be.mu.Lock()
 	be.free = 10
 	be.mu.Unlock()
-	if got := be.post("/build/estimate", buildForm("6", "1", map[string]string{"sm": "100"})); !strings.Contains(got, "not enough disk") || !strings.Contains(got, "text-st-error") {
+	if got := be.post("/build/estimate", buildForm("1", map[string]string{"sm": "6"})); !strings.Contains(got, "not enough disk") || !strings.Contains(got, "text-st-error") {
 		t.Fatalf("disk: %s", got)
 	}
 }
 
 func TestBuildRunStreamAndRollback(t *testing.T) {
 	be := newBuildEnv(t, false)
-	body := be.post("/build/run", buildForm("6", "11", map[string]string{"sm": "50", "ciena-6500-tl1": "50"}))
+	body := be.post("/build/run", buildForm("11", map[string]string{"sm": "3", "ciena-6500-tl1": "3"}))
 	id := jobID(t, body)
 	if !strings.Contains(body, `sse-close="done"`) || !strings.Contains(body, `sse-swap="line"`) {
 		t.Fatalf("job panel: %s", body)
 	}
 	log := be.streamJob(id)
-	for _, want := range []string{"Build of 6 devices, seed 11", "wrote ", "current -&gt; builds/", "restarting", "is live", "STATE: ", "Finished."} {
+	for _, want := range []string{"Build of 6 devices", "wrote ", "current -&gt; builds/", "restarting", "is live", "STATE: ", "Finished."} {
 		if !strings.Contains(log, want) {
 			t.Errorf("job log missing %q:\n%s", want, log)
 		}
@@ -201,7 +204,7 @@ func TestBuildRunStreamAndRollback(t *testing.T) {
 	if !strings.Contains(page, "Previous build <span class=\"num text-fg\">B0</span>") || !strings.Contains(page, `hx-post="/build/rollback"`) {
 		t.Fatalf("rollback not offered after a build")
 	}
-	if !strings.Contains(page, "11") || !strings.Contains(page, "sm:50,ciena-6500-tl1:50") {
+	if !strings.Contains(page, "11") || !strings.Contains(page, `name="count_ciena-6500-tl1" value="3"`) {
 		t.Fatal("the form must start from the live build's settings")
 	}
 
@@ -224,7 +227,7 @@ func TestBuildAndFleetRestartExclusive(t *testing.T) {
 	be.srv.rollMu.Lock()
 	be.srv.rolling.Running = true
 	be.srv.rollMu.Unlock()
-	if body := be.post("/build/run", buildForm("6", "1", map[string]string{"sm": "100"})); !strings.Contains(body, "rolling restart is running") {
+	if body := be.post("/build/run", buildForm("1", map[string]string{"sm": "6"})); !strings.Contains(body, "rolling restart is running") {
 		t.Fatalf("build during a fleet rolling restart: %s", body)
 	}
 	be.srv.rollMu.Lock()
@@ -232,11 +235,11 @@ func TestBuildAndFleetRestartExclusive(t *testing.T) {
 	be.srv.rollMu.Unlock()
 
 	t.Setenv("FAKE_GEN_SLEEP", "0.5")
-	id := jobID(t, be.post("/build/run", buildForm("6", "1", map[string]string{"sm": "100"})))
+	id := jobID(t, be.post("/build/run", buildForm("1", map[string]string{"sm": "6"})))
 	if body := be.post("/fleet/rolling-restart", url.Values{"pause": {"0"}}); !strings.Contains(body, "build or rollback is running") {
 		t.Fatalf("fleet rolling restart during a build: %s", body)
 	}
-	if body := be.post("/build/run", buildForm("6", "2", map[string]string{"sm": "100"})); !strings.Contains(body, "already running") {
+	if body := be.post("/build/run", buildForm("2", map[string]string{"sm": "6"})); !strings.Contains(body, "already running") {
 		t.Fatalf("second build: %s", body)
 	}
 	be.streamJob(id)

@@ -6,27 +6,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/rcfg-sim/rcfg-sim/internal/configs"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/catalogue"
 )
-
-// modelAvgBytes is the average config size per model. The Cisco buckets are
-// the README's size table; the TL1 models were measured (400 devices each
-// with rcfg-sim-gen). TestEstimateMatchesGenerator keeps them honest.
-var modelAvgBytes = map[string]int64{
-	"sm":                 25_600,
-	"md":                 192_500,
-	"lg":                 940_000,
-	"xl":                 3_180_000,
-	"2xl":                6_200_000,
-	"3xl":                12_700_000,
-	"4xl":                24_700_000,
-	"5xl":                52_100_000,
-	"6xl":                106_700_000,
-	"ciena-6500-tl1":     1_700,
-	"ciena-6500-tl1-gne": 7_300,
-	"infinera-dtnx-tl1":  7_400,
-	"cisco-ons15454-tl1": 2_950,
-}
 
 // Throughput figures for the time estimate, measured with rcfg-sim-gen:
 // roughly 12 MB/s of config written plus a per-file cost.
@@ -54,18 +35,20 @@ type ModelCount struct {
 	Bytes int64
 }
 
-// EstimateBuild estimates a build of count devices with the given
-// distribution (as returned by configs.ParseDistribution). Device counts
-// per model follow the generator's rounding closely enough for an estimate.
-func EstimateBuild(count int, dist map[string]int) Estimate {
+// EstimateBuild estimates a build with these devices per model, using the
+// catalogue's average config sizes (measured against the generator; the
+// configs package's tests keep them honest).
+func EstimateBuild(counts map[string]int, cat *catalogue.Catalogue) Estimate {
 	var e Estimate
-	files := 0
-	for _, m := range configs.Models() {
-		n := count * dist[m] / 100
+	files, count := 0, 0
+	for _, m := range cat.ModelIDs() {
+		n := counts[m]
 		if n == 0 {
 			continue
 		}
-		avg := modelAvgBytes[m]
+		count += n
+		model, _ := cat.Model(m)
+		avg := model.AvgBytes
 		blocks := (avg + blockSize - 1) / blockSize * blockSize
 		e.ConfigBytes += int64(n) * avg
 		e.DiskBytes += int64(n) * blocks

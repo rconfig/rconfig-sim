@@ -1,0 +1,34 @@
+{
+  "name": "Scenario 6: burst load",
+  "description": "Scenario 5's fleet for a \"poll all devices now\" burst from rConfig (TEST-SCENARIOS.md scenario 6).",
+  "version": 1,
+  "devices": {
+    "source": "generated",
+    "generated": {
+      "seed": 5,
+      "families": {
+        "ip": {
+          "models": {
+            "sm": 20000,
+            "md": 20000,
+            "lg": 7500,
+            "xl": 2500
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "faults": {},
+    "profiles": {
+      "seed": 42,
+      "rules": []
+    },
+    "delay_ms": {
+      "min": 50,
+      "max": 500
+    },
+    "max_sessions": 5000,
+    "active_devices": "all"
+  }
+}

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -29,6 +30,19 @@ const (
 	ResponseDelayMSMax    = "RESPONSE_DELAY_MS_MAX"
 	MaxConcurrentSessions = "MAX_CONCURRENT_SESSIONS"
 	ActiveDevices         = "ACTIVE_DEVICES"
+	// SSHAuth is the instance's --ssh-auth (Phase 8). Changing it needs a
+	// restart: the admin API cannot.
+	SSHAuth = "SSH_AUTH"
+	// CommandsRoot, Password and EnablePassword are owned while a scenario
+	// testbench runs and restored when a generated one starts (Phase 9).
+	// They also need a restart.
+	CommandsRoot   = "COMMANDS_ROOT"
+	Password       = "PASSWORD"
+	EnablePassword = "ENABLE_PASSWORD"
+	// AllowEmpty is set true on every instance the controller starts a
+	// testbench on, so an instance left without devices idles rather than
+	// failing (Phase 9 item 5).
+	AllowEmpty = "ALLOW_EMPTY"
 )
 
 // Legacy fault keys, cleared whenever FAULT_RATES is written: rcfg-sim
@@ -41,7 +55,8 @@ const (
 // Owned lists every key Update may write.
 var Owned = []string{
 	FaultRates, DeviceProfiles, ProfileSeed, ResponseDelayMSMin,
-	ResponseDelayMSMax, MaxConcurrentSessions, ActiveDevices,
+	ResponseDelayMSMax, MaxConcurrentSessions, ActiveDevices, SSHAuth,
+	CommandsRoot, Password, EnablePassword, AllowEmpty,
 }
 
 // clearedLegacy is what the legacy fault keys are set to when FAULT_RATES is
@@ -145,6 +160,40 @@ func (f *File) Set(key, val string) {
 		f.lines = append(f.lines, line)
 	}
 	f.Values[key] = val
+}
+
+// Delete removes every assignment of key. Like Set, it does not check
+// ownership.
+func (f *File) Delete(key string) {
+	f.lines = slices.DeleteFunc(f.lines, func(ln string) bool {
+		k, _, ok := parseLine(ln)
+		return ok && k == key
+	})
+	delete(f.Values, key)
+}
+
+// Restore sets or removes owned keys in the env file at path and writes it
+// back atomically: a nil value removes the key (so the unit default
+// applies again), any other sets it. Keys outside Owned are refused before
+// anything is written.
+func Restore(path string, keys map[string]*string) error {
+	for k := range keys {
+		if !slices.Contains(Owned, k) {
+			return fmt.Errorf("%s: %w", k, ErrNotOwned)
+		}
+	}
+	f, err := Read(path)
+	if err != nil {
+		return err
+	}
+	for _, k := range slices.Sorted(maps.Keys(keys)) {
+		if v := keys[k]; v == nil {
+			f.Delete(k)
+		} else {
+			f.Set(k, *v)
+		}
+	}
+	return WriteAtomic(path, f.Bytes())
 }
 
 // Bytes renders the file.

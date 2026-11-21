@@ -73,8 +73,35 @@ type Fleet struct {
 	hist   map[string][]float64     // bytes/s per instance, for the sparkline
 	series []RatePoint              // fleet-wide chart points, last SeriesWindow
 
+	use    useCache     // devices per instance in the live manifest
 	envMu  sync.Map     // env path -> *sync.Mutex, serialising writes per file
 	stream *http.Client // no overall timeout, for event streams
+
+	obsMu     sync.Mutex
+	observers []func(Sample)
+}
+
+// Sample is one poll's counter growth per instance, for run totals. An
+// instance appears once it has been scraped in two polls in a row; an
+// instance restart shows as a counter reset (see CounterDelta).
+type Sample struct {
+	At        time.Time
+	Instances map[string]InstanceSample
+}
+
+// InstanceSample is one instance's counter growth since the previous poll
+// and its open sessions now.
+type InstanceSample struct {
+	Delta          Counters
+	ActiveSessions float64
+}
+
+// Observe calls fn after every poll with that poll's Sample. fn must not
+// block for long.
+func (f *Fleet) Observe(fn func(Sample)) {
+	f.obsMu.Lock()
+	defer f.obsMu.Unlock()
+	f.observers = append(f.observers, fn)
 }
 
 // New returns a Fleet. Call Poll (or Run) to fill it.
@@ -117,20 +144,27 @@ func (f *Fleet) Poll(ctx context.Context) {
 	if err != nil {
 		f.opt.Logger.Error("discover instances", "dir", f.opt.EnvDir, "err", err)
 	}
+	unused := f.unused(insts)
 	views := make([]View, len(insts))
 	var wg sync.WaitGroup
 	for i, in := range insts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			views[i] = f.poll(ctx, in)
+			views[i] = f.poll(ctx, in, unused[in.Name])
 		}()
 	}
 	wg.Wait()
 	f.mu.Lock()
-	f.record(views, time.Now())
+	sample := f.record(views, time.Now())
 	f.views = views
 	f.mu.Unlock()
+	f.obsMu.Lock()
+	obs := slices.Clone(f.observers)
+	f.obsMu.Unlock()
+	for _, fn := range obs {
+		fn(sample)
+	}
 }
 
 // Views returns a copy of the last poll.
@@ -152,7 +186,31 @@ func (f *Fleet) View(name string) (View, bool) {
 	return View{}, false
 }
 
-func (f *Fleet) poll(ctx context.Context, in Instance) View {
+// unused names the instances with no devices in their manifest. Every
+// instance shares one manifest on the data/ layout; one that cannot be
+// read marks nothing unused.
+func (f *Fleet) unused(insts []Instance) map[string]bool {
+	out := map[string]bool{}
+	var ok []Instance
+	for _, in := range insts {
+		if in.Err == nil && in.Manifest == insts[0].Manifest {
+			ok = append(ok, in)
+		}
+	}
+	if len(ok) == 0 {
+		return out
+	}
+	counts, err := f.use.get(ok[0].Manifest, ok)
+	if err != nil {
+		return out
+	}
+	for n, c := range counts {
+		out[n] = c == 0
+	}
+	return out
+}
+
+func (f *Fleet) poll(ctx context.Context, in Instance, unused bool) View {
 	v := View{Instance: in, LastPoll: time.Now()}
 	if d, err := DesiredFromEnv(in); err == nil {
 		v.Desired = &d
@@ -163,7 +221,10 @@ func (f *Fleet) poll(ctx context.Context, in Instance) View {
 		return v
 	case len(in.PortClash) > 0:
 		v.Status = StatusPortClash
-		v.Detail = fmt.Sprintf("metrics port %s also used by %s", in.MetricsAddr, strings.Join(in.PortClash, ", "))
+		v.Detail = fmt.Sprintf("a listener port (METRICS_ADDR %s, ADMIN_ADDR %s) is also used by %s", in.MetricsAddr, orNone(in.AdminAddr), strings.Join(in.PortClash, ", "))
+		return v
+	case unused:
+		v.Status, v.Detail = StatusUnused, UnusedDetail
 		return v
 	}
 
@@ -182,12 +243,16 @@ func (f *Fleet) poll(ctx context.Context, in Instance) View {
 		v.counters = &counterSample{at: time.Now(), c: c}
 	}
 
-	st, code, err := f.getState(ctx, in.DialAddr)
+	// The admin API: its own loopback listener (D3). Off when ADMIN_ADDR is
+	// empty or does not answer (section 7.2).
+	if in.AdminAddr == "" {
+		v.Status, v.Detail = StatusAdminOff, "admin API is off: add ADMIN_ADDR=127.0.0.1:<port> to "+in.EnvPath+" and restart"
+		return v
+	}
+	st, code, err := f.getState(ctx, in.AdminAddr)
 	switch {
-	case err != nil:
-		v.Status, v.Detail = StatusError, err.Error()
-	case code == http.StatusNotFound:
-		v.Status, v.Detail = StatusAdminOff, "admin API is off: add ADMIN=true to "+in.EnvPath+" and restart"
+	case err != nil, code == http.StatusNotFound:
+		v.Status, v.Detail = StatusAdminOff, "admin API at ADMIN_ADDR "+in.AdminAddr+" does not answer: check "+in.EnvPath+" and restart"
 	case code != http.StatusOK:
 		v.Status, v.Detail = StatusError, fmt.Sprintf("admin API answered %d", code)
 	default:
@@ -214,6 +279,13 @@ func (f *Fleet) healthz(ctx context.Context, addr string) error {
 		return fmt.Errorf("healthz: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 // Healthy reports whether the named instance answers /healthz now. Used by
@@ -275,11 +347,12 @@ func (f *Fleet) scrapeCounters(ctx context.Context, addr string) (Counters, erro
 
 // record differences this poll's counters against the last poll's, per
 // instance: each instance's bytes/s history (the card sparkline) and one
-// fleet-wide chart point. An instance with no scrape this poll (down, or
-// /metrics failed) drops its history, so the next scrape starts afresh.
-// Called with f.mu held.
-func (f *Fleet) record(views []View, now time.Time) {
+// fleet-wide chart point, and the per-instance Sample for observers. An
+// instance with no scrape this poll (down, or /metrics failed) drops its
+// history, so the next scrape starts afresh. Called with f.mu held.
+func (f *Fleet) record(views []View, now time.Time) Sample {
 	point := newPoint(now)
+	sample := Sample{At: now, Instances: map[string]InstanceSample{}}
 	rated := false
 	seen := map[string]bool{}
 	for i := range views {
@@ -293,6 +366,7 @@ func (f *Fleet) record(views []View, now time.Time) {
 			if dt := cur.at.Sub(prev.at).Seconds(); dt > 0 {
 				point.addRates(prev.c, cur.c, dt)
 				rated = true
+				sample.Instances[v.Name] = InstanceSample{Delta: counterDeltas(prev.c, cur.c), ActiveSessions: cur.c.ActiveSessions}
 				h := append(f.hist[v.Name], CounterDelta(prev.c.Bytes, cur.c.Bytes)/dt)
 				if len(h) > historyLen {
 					h = h[len(h)-historyLen:]
@@ -318,6 +392,7 @@ func (f *Fleet) record(views []View, now time.Time) {
 		i++
 	}
 	f.series = f.series[i:]
+	return sample
 }
 
 // Series returns the fleet-wide chart points for the last SeriesWindow,

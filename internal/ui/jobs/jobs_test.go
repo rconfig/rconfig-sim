@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -15,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rcfg-sim/rcfg-sim/internal/configs"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/catalogue"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/fleet"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/systemd"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/uitest"
@@ -31,6 +30,7 @@ type rig struct {
 	calls   []string
 	unhappy map[string]bool // instances that never come back healthy
 	free    int64
+	removed []string // builds retention told Options.Removed about
 }
 
 // newRig builds an adopted install in a temp directory: two instances
@@ -41,7 +41,7 @@ func newRig(t *testing.T) *rig {
 	r := &rig{t: t, root: filepath.Join(tmp, "data"), envDir: filepath.Join(tmp, "etc"),
 		args: filepath.Join(tmp, "gen-args"), unhappy: map[string]bool{}, free: 1 << 40}
 	gen := filepath.Join(tmp, "fake-gen")
-	must(t, os.WriteFile(gen, []byte(uitest.FakeGenScript), 0o755))
+	uitest.WriteFakeGen(t, gen)
 	t.Setenv("FAKE_GEN_ARGS", r.args)
 
 	b0 := filepath.Join(r.root, "builds", "B0")
@@ -70,8 +70,10 @@ func newRig(t *testing.T) *rig {
 		EnvDir: r.envDir, GenBin: gen, LogDir: filepath.Join(tmp, "jobs"),
 		Units:   systemd.New("systemctl", r.systemctl),
 		Healthy: r.healthy, Pause: time.Millisecond, Wait: 200 * time.Millisecond,
-		Now:  func() time.Time { return time.Date(2026, 10, 31, 9, 15, 0, 0, time.UTC) },
-		Free: func(string) (int64, error) { return r.free, nil },
+		Now:       func() time.Time { return time.Date(2026, 10, 31, 9, 15, 0, 0, time.UTC) },
+		Free:      func(string) (int64, error) { return r.free, nil },
+		Catalogue: catalogue.NewSource(gen, nil),
+		Removed:   func(name string) { r.mu.Lock(); r.removed = append(r.removed, name); r.mu.Unlock() },
 	})
 	t.Cleanup(r.runner.Close)
 	return r
@@ -221,11 +223,35 @@ func TestCountBounds(t *testing.T) {
 	if strings.Contains(steps, "enable --now") {
 		t.Error("a new instance has no devices until the build: enable, do not start")
 	}
+	if strings.Contains(steps, "ADMIN_ADDR") {
+		t.Error("the template's admin API is off, so the copy's must stay off")
+	}
+
+	// With admin APIs on, each new instance gets the next free loopback port.
+	for i := 1; i <= 2; i++ {
+		f, err := os.OpenFile(filepath.Join(r.envDir, fmt.Sprintf("127.0.0.%d.env", i)), os.O_APPEND|os.O_WRONLY, 0)
+		must(t, err)
+		_, err = fmt.Fprintf(f, "ADMIN_ADDR=127.0.0.1:1910%d\n", i)
+		must(t, errors.Join(err, f.Close()))
+	}
+	if l, err = LayoutOf(discover(t, r.envDir), r.envDir); err != nil {
+		t.Fatal(err)
+	}
+	_ = errors.As(l.CheckCount(12), &ce)
+	steps = strings.Join(ce.Steps, "\n")
+	for _, want := range []string{"ADMIN_ADDR=127.0.0.1:19103|", "ADMIN_ADDR=127.0.0.1:19104|"} {
+		if !strings.Contains(steps, want) {
+			t.Errorf("steps missing %q:\n%s", want, steps)
+		}
+	}
 }
 
 func TestEstimateBuild(t *testing.T) {
-	dist, _ := configs.ParseDistribution("sm:50,ciena-6500-tl1:50")
-	e := EstimateBuild(1000, dist)
+	cat, err := catalogue.Decode(uitest.CatalogueJSON(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := EstimateBuild(map[string]int{"sm": 500, "ciena-6500-tl1": 500}, cat)
 	if e.ConfigBytes != 500*25_600+500*1_700 {
 		t.Fatalf("config bytes: %d", e.ConfigBytes)
 	}
@@ -236,49 +262,19 @@ func TestEstimateBuild(t *testing.T) {
 	if e.NeedFree != int64(float64(e.DiskBytes)*1.10) || e.Generate <= 0 || len(e.PerModel) != 2 || e.PerModel[0].Model != "sm" {
 		t.Fatalf("estimate: %+v", e)
 	}
-	for _, m := range configs.Models() {
-		if modelAvgBytes[m] == 0 {
-			t.Errorf("no size for model %s", m)
-		}
-	}
-}
-
-// TestEstimateMatchesGenerator generates a sample of each affordable model
-// and checks the size table within 35%.
-func TestEstimateMatchesGenerator(t *testing.T) {
-	if testing.Short() {
-		t.Skip("generates configs")
-	}
-	for _, m := range []string{"sm", "md", "lg", "xl", "ciena-6500-tl1", "ciena-6500-tl1-gne", "infinera-dtnx-tl1", "cisco-ons15454-tl1"} {
-		n := 40
-		if m == "lg" || m == "xl" {
-			n = 10
-		}
-		dir := t.TempDir()
-		if _, err := configs.Run(configs.Config{Count: n, OutputDir: filepath.Join(dir, "c"), ManifestPath: filepath.Join(dir, "m.csv"),
-			IPBase: "10.0.0.1", IPCount: 1, PortStart: 10000, DevicesPerIP: n, Seed: 42, Distribution: m + ":100",
-			Username: "a", Password: "a", EnablePassword: "a"}, io.Discard); err != nil {
-			t.Fatalf("%s: %v", m, err)
-		}
-		var total int64
-		entries, _ := os.ReadDir(filepath.Join(dir, "c"))
-		for _, e := range entries {
-			fi, _ := e.Info()
-			total += fi.Size()
-		}
-		avg, want := float64(total)/float64(n), float64(modelAvgBytes[m])
-		if avg < want*0.65 || avg > want*1.35 {
-			t.Errorf("%s: generated average %.0f bytes, table says %.0f", m, avg, want)
-		}
-	}
 }
 
 func TestBuildRollbackAndRetention(t *testing.T) {
 	r := newRig(t)
-	// An older build that retention should remove.
-	must(t, os.MkdirAll(filepath.Join(r.root, "builds", "A-older", "configs"), 0o755))
+	// Two older builds: with --keep-builds 3 retention keeps the new one, B0
+	// (just replaced, so most recently used) and the newer of these two.
+	for i, name := range []string{"A-older", "A-oldest"} {
+		dir := filepath.Join(r.root, "builds", name)
+		must(t, os.MkdirAll(filepath.Join(dir, "configs"), 0o755))
+		must(t, writeSettings(dir, &Settings{Name: name, LastUsed: time.Date(2026, 10, 1-i, 0, 0, 0, 0, time.UTC)}))
+	}
 
-	j, err := r.runner.StartBuild(Request{Count: 5, Seed: 99, Distribution: "sm:60,md:40"})
+	j, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 3, "md": 2}, Seed: 99, Distribution: "sm:60,md:40"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,15 +287,15 @@ func TestBuildRollbackAndRetention(t *testing.T) {
 	if r.current() != "builds/"+name {
 		t.Fatalf("current -> %s", r.current())
 	}
-	if b := r.builds(); !slices.Equal(b, []string{name, "B0"}) {
-		t.Fatalf("retention: builds %v, want the new one and B0", b)
+	if b := r.builds(); !slices.Equal(b, []string{name, "A-older", "B0"}) {
+		t.Fatalf("retention: builds %v, want the new one, A-older and B0", b)
 	}
 
 	// The generator was given the request, the layout, the live build's
 	// credentials and its carried-over options.
 	args, _ := os.ReadFile(r.args)
 	dir := filepath.Join(r.root, "builds", name)
-	for _, want := range []string{"--count 5", "--seed 99", "--distribution sm:60,md:40", "--ip-base 127.0.0.1", "--ip-count 2",
+	for _, want := range []string{"--counts md:2,sm:3", "--seed 99", "--ip-base 127.0.0.1", "--ip-count 2",
 		"--devices-per-ip 3", "--port-start 10000", "--username ops", "--password s3cret", "--enable-password en4ble",
 		"--rne-dual-home-pct 10", "--output-dir " + filepath.Join(dir, "configs"), "--manifest " + filepath.Join(dir, "manifest.csv")} {
 		if !strings.Contains(string(args), want) {
@@ -352,7 +348,7 @@ func TestBuildRollbackAndRetention(t *testing.T) {
 	if rb.Err() != nil || r.current() != "builds/B0" || len(r.restarts()) != 4 {
 		t.Fatalf("rollback: %v, current %s, restarts %v", rb.Err(), r.current(), r.restarts())
 	}
-	if b := r.builds(); !slices.Equal(b, []string{name, "B0"}) {
+	if b := r.builds(); !slices.Equal(b, []string{name, "A-older", "B0"}) {
 		t.Fatalf("rollback must keep the newer build: %v", b)
 	}
 }
@@ -360,7 +356,7 @@ func TestBuildRollbackAndRetention(t *testing.T) {
 func TestGeneratorFailureLeavesLiveBuild(t *testing.T) {
 	r := newRig(t)
 	t.Setenv("FAKE_GEN_FAIL", "1")
-	j, err := r.runner.StartBuild(Request{Count: 6, Seed: 1, Distribution: "sm:100"})
+	j, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,10 +376,11 @@ func TestRefusedBeforeAnythingIsWritten(t *testing.T) {
 		free int64
 		want string
 	}{
-		"too few":      {Request{Count: 3, Seed: 1, Distribution: "sm:100"}, 1 << 40, "would leave an instance with none"},
-		"too many":     {Request{Count: 7, Seed: 1, Distribution: "sm:100"}, 1 << 40, "need more IP aliases"},
-		"distribution": {Request{Count: 6, Seed: 1, Distribution: "sm:50"}, 1 << 40, "sum to 100"},
-		"disk":         {Request{Count: 6, Seed: 1, Distribution: "sm:100"}, 1000, "not enough disk"},
+		"too few":    {Request{Counts: map[string]int{"sm": 3}, Seed: 1}, 1 << 40, "would leave an instance with none"},
+		"too many":   {Request{Counts: map[string]int{"sm": 7}, Seed: 1}, 1 << 40, "need more IP aliases"},
+		"model":      {Request{Counts: map[string]int{"nope": 6}, Seed: 1}, 1 << 40, "unknown model"},
+		"no devices": {Request{Counts: map[string]int{"sm": 0}, Seed: 1}, 1 << 40, "no devices"},
+		"disk":       {Request{Counts: map[string]int{"sm": 6}, Seed: 1}, 1000, "not enough disk"},
 	}
 	for name, c := range cases {
 		r.free = c.free
@@ -410,7 +407,7 @@ func TestNotAdoptedBuildsNothing(t *testing.T) {
 	if st := r.runner.Status(); !errors.As(st.Err, &na) {
 		t.Fatalf("status: %v", st.Err)
 	}
-	if _, err := r.runner.StartBuild(Request{Count: 6, Seed: 1, Distribution: "sm:100"}); !errors.As(err, &na) {
+	if _, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 1}); !errors.As(err, &na) {
 		t.Fatalf("build: %v", err)
 	}
 	if _, err := os.Stat(r.args); !os.IsNotExist(err) {
@@ -421,7 +418,7 @@ func TestNotAdoptedBuildsNothing(t *testing.T) {
 func TestFailedRestartOffersRollback(t *testing.T) {
 	r := newRig(t)
 	r.unhappy["127.0.0.2"] = true
-	j, err := r.runner.StartBuild(Request{Count: 6, Seed: 1, Distribution: "sm:100"})
+	j, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,11 +444,11 @@ func TestFailedRestartOffersRollback(t *testing.T) {
 func TestOneJobAtATime(t *testing.T) {
 	r := newRig(t)
 	t.Setenv("FAKE_GEN_SLEEP", "0.5")
-	j, err := r.runner.StartBuild(Request{Count: 6, Seed: 1, Distribution: "sm:100"})
+	j, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.runner.StartBuild(Request{Count: 6, Seed: 2, Distribution: "sm:100"}); !errors.Is(err, ErrBusy) {
+	if _, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 2}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second build: %v", err)
 	}
 	if _, err := r.runner.StartRollback(); !errors.Is(err, ErrBusy) {
@@ -590,14 +587,125 @@ func TestUnwritableDataDirRefused(t *testing.T) {
 
 	// The runner refuses before planning.
 	r.runner.opt.Writable = func(dir string) error { return &WritableError{Dir: dir, Err: os.ErrPermission} }
-	_, err := r.runner.Plan(Request{Count: 6, Seed: 1, Distribution: "sm:100"})
+	_, err := r.runner.Plan(Request{Counts: map[string]int{"sm": 6}, Seed: 1})
 	if !errors.As(err, &we) || !strings.Contains(err.Error(), "/opt/rcfg-sim/data") {
 		t.Fatalf("plan: want a WritableError, got %v", err)
 	}
-	if _, err := r.runner.StartBuild(Request{Count: 6, Seed: 1, Distribution: "sm:100"}); !errors.As(err, &we) {
+	if _, err := r.runner.StartBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 1}); !errors.As(err, &we) {
 		t.Fatalf("build: %v", err)
 	}
 	if _, err := os.Stat(r.args); !os.IsNotExist(err) {
 		t.Fatal("generator ran with an unwritable data directory")
+	}
+}
+
+func TestHashSettings(t *testing.T) {
+	l := Layout{IPBase: "10.0.0.1", IPCount: 2, PortStart: 10000, DevicesPerIP: 3}
+	counts := map[string]int{"sm": 4, "md": 2, "lg": 0}
+	a := HashSettings(counts, 1, map[string]string{"x": "1", "y": "2"}, l)
+	// Map order, zero counts and option order do not matter.
+	if b := HashSettings(map[string]int{"md": 2, "sm": 4}, 1, map[string]string{"y": "2", "x": "1"}, l); a != b {
+		t.Fatal("same settings, different hash")
+	}
+	l2 := l
+	l2.PortStart = 20000
+	for name, h := range map[string]string{
+		"count":  HashSettings(map[string]int{"sm": 5, "md": 2}, 1, map[string]string{"x": "1", "y": "2"}, l),
+		"model":  HashSettings(map[string]int{"sm": 4, "lg": 2}, 1, map[string]string{"x": "1", "y": "2"}, l),
+		"seed":   HashSettings(counts, 2, map[string]string{"x": "1", "y": "2"}, l),
+		"option": HashSettings(counts, 1, map[string]string{"x": "1"}, l),
+		"layout": HashSettings(counts, 1, map[string]string{"x": "1", "y": "2"}, l2),
+	} {
+		if h == a {
+			t.Errorf("%s: changing it must change the hash", name)
+		}
+	}
+}
+
+func TestEnsureBuildReusesKeptBuilds(t *testing.T) {
+	r := newRig(t)
+	// ensure runs EnsureBuild and reports whether current changed and
+	// whether the generator ran.
+	ensure := func(req Request) (changed, generated bool) {
+		t.Helper()
+		_ = os.Remove(r.args)
+		j, err := r.runner.RunJob("testbench", func(j *Job) (err error) {
+			changed, err = r.runner.EnsureBuild(j, req)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait(t, j)
+		if j.Err() != nil {
+			lines, _ := j.Lines(0)
+			t.Fatalf("ensure: %v\n%s", j.Err(), strings.Join(lines, "\n"))
+		}
+		_, err = os.Stat(r.args)
+		return changed, err == nil
+	}
+
+	a := Request{Counts: map[string]int{"sm": 6}, Seed: 1, Options: map[string]string{}}
+	if changed, gen := ensure(a); !changed || !gen {
+		t.Fatalf("first: changed %v, generated %v; want both", changed, gen)
+	}
+	first := r.current()
+	if changed, gen := ensure(a); changed || gen || r.current() != first {
+		t.Fatal("same settings again: want no change and no generation")
+	}
+	if len(r.restarts()) != 0 {
+		t.Fatalf("EnsureBuild must not restart: %v", r.restarts())
+	}
+
+	b := Request{Counts: map[string]int{"sm": 6}, Seed: 2, Options: map[string]string{}}
+	if changed, gen := ensure(b); !changed || !gen || r.current() == first {
+		t.Fatalf("other settings: changed %v, generated %v; want both", changed, gen)
+	}
+	// Back to a: the kept build is switched to, not regenerated.
+	if changed, gen := ensure(a); !changed || gen || r.current() != first {
+		t.Fatalf("back to a: changed %v, generated %v, current %s; want a switch to %s", changed, gen, r.current(), first)
+	}
+	s, err := ReadSettings(filepath.Join(r.root, "current"))
+	if err != nil || s.SettingsHash == "" || !s.LastUsed.Equal(time.Date(2026, 10, 31, 9, 15, 0, 0, time.UTC)) {
+		t.Fatalf("build.json: %+v %v", s, err)
+	}
+	// --keep-builds 3: the live one and the two most recently used (b, B0).
+	if got := len(r.builds()); got != 3 {
+		t.Fatalf("builds %v, want 3", r.builds())
+	}
+
+	// KeptBuild finds builds by settings; a kept, non-live one is not live.
+	if name, _, live, ok := r.runner.KeptBuild(a); !ok || !live || "builds/"+name != r.current() {
+		t.Fatalf("KeptBuild(a): %s live=%v ok=%v", name, live, ok)
+	}
+	if _, _, live, ok := r.runner.KeptBuild(b); !ok || live {
+		t.Fatalf("KeptBuild(b): live=%v ok=%v", live, ok)
+	}
+	if _, _, _, ok := r.runner.KeptBuild(Request{Counts: map[string]int{"sm": 6}, Seed: 3, Options: map[string]string{}}); ok {
+		t.Fatal("KeptBuild for settings never built")
+	}
+	if _, _, ok := r.runner.BuildDir("../B0"); ok {
+		t.Fatal("BuildDir accepted a path")
+	}
+
+	// StartKeptBuild generates without touching current or restarting.
+	c := Request{Counts: map[string]int{"sm": 6}, Seed: 3, Options: map[string]string{}}
+	j, err := r.runner.StartKeptBuild(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait(t, j)
+	if j.Err() != nil || r.current() != first || len(r.restarts()) != 0 {
+		t.Fatalf("kept build: %v, current %s, restarts %v", j.Err(), r.current(), r.restarts())
+	}
+	if _, _, live, ok := r.runner.KeptBuild(c); !ok || live {
+		t.Fatal("kept build not found")
+	}
+	// Retention removed one build to keep three, and said so.
+	r.mu.Lock()
+	removed := slices.Clone(r.removed)
+	r.mu.Unlock()
+	if len(removed) == 0 || len(r.builds()) != 3 {
+		t.Fatalf("removed %v, builds %v", removed, r.builds())
 	}
 }

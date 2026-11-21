@@ -1,17 +1,20 @@
 package web
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"html"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/rcfg-sim/rcfg-sim/internal/configs"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/catalogue"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/jobs"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/web/views"
+	ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
 )
 
 // jobPoll is how often a job stream checks for new log lines.
@@ -26,10 +29,81 @@ func buildInfo(s *jobs.Settings) *views.BuildInfo {
 	if s.Seed != nil {
 		b.Seed = strconv.FormatInt(*s.Seed, 10)
 	}
-	if s.Distribution != "" {
+	switch {
+	case s.Scenario != "":
+		b.Seed, b.Distribution = "none (installed, not generated)", "scenario "+s.Scenario
+	case s.Distribution != "":
 		b.Distribution = s.Distribution
+	case len(s.Counts) > 0:
+		b.Distribution = countsLabel(s.Counts)
 	}
 	return b
+}
+
+// countsLabel is per-model counts for display, largest first.
+func countsLabel(counts map[string]int) string {
+	type mc struct {
+		m string
+		n int
+	}
+	var all []mc
+	for m, n := range counts {
+		all = append(all, mc{m, n})
+	}
+	slices.SortFunc(all, func(a, b mc) int { return cmp.Or(b.n-a.n, strings.Compare(a.m, b.m)) })
+	var parts []string
+	for _, x := range all {
+		parts = append(parts, fmt.Sprintf("%s %d", x.m, x.n))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// countsOf is a build's per-model counts for the Build form: its counts
+// if it recorded them, else its distribution spread over its count, else
+// the default distribution over count (clamped to what fits).
+func countsOf(cat *catalogue.Catalogue, live *jobs.Settings, count int) map[string]int {
+	if len(live.Counts) > 0 {
+		return live.Counts
+	}
+	if live.Distribution != "" {
+		if w, err := cat.ParseDistribution(live.Distribution); err == nil {
+			return cat.Counts(count, w)
+		}
+	}
+	w, _ := cat.ParseDistribution(jobs.DefaultDistribution)
+	return cat.Counts(count, w)
+}
+
+// countRows is the Build form's count rows, one group per family, the
+// same component as the guided flow's device panels.
+func countRows(cat *catalogue.Catalogue, counts map[string]int) []views.CountGroup {
+	total := sumCounts(counts)
+	var out []views.CountGroup
+	for _, fam := range cat.Families {
+		g := views.CountGroup{Name: fam.Name}
+		for _, mod := range cat.ModelsIn(fam.ID) {
+			n := counts[mod.ID]
+			share := 0.0
+			if total > 0 {
+				share = 100 * float64(n) / float64(total)
+			}
+			d, _ := cat.Driver(mod.Driver)
+			g.Rows = append(g.Rows, ui.Count{Name: "count_" + mod.ID, Model: mod.ID, Description: mod.Vendor + ". " + mod.Description,
+				Protocol: strings.ToUpper(d.Protocol), AvgSize: jobs.HumanBytes(mod.AvgBytes), Value: n, Share: share})
+		}
+		if len(g.Rows) > 0 {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+func sumCounts(c map[string]int) int {
+	n := 0
+	for _, v := range c {
+		n += v
+	}
+	return n
 }
 
 func jobModel(j *jobs.Job) *views.JobModel {
@@ -54,8 +128,11 @@ func (s *Server) buildPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.opt.Jobs.Status()
+	cat, catErr := s.opt.Catalogue.Get()
 	var na *jobs.NotAdoptedError
 	switch {
+	case catErr != nil:
+		m.Err = catErr.Error()
 	case errors.As(st.Err, &na):
 		m.NotAdopted = na.Reason
 	case st.Err != nil:
@@ -66,72 +143,63 @@ func (s *Server) buildPage(w http.ResponseWriter, r *http.Request) {
 		m.Live, m.Previous = buildInfo(st.Live), buildInfo(st.Previous)
 		m.Instances, m.PerIP = l.IPCount, l.DevicesPerIP
 		m.MinCount, m.MaxCount = l.CountBounds()
-		m.Count = min(max(st.Live.Count, m.MinCount), m.MaxCount)
-		m.Seed, m.Unknowns = jobs.DefaultSeed, st.Live.Seed == nil || st.Live.Distribution == ""
+		m.Seed, m.Unknowns = jobs.DefaultSeed, st.Live.Seed == nil || (st.Live.Distribution == "" && len(st.Live.Counts) == 0)
 		if st.Live.Seed != nil {
 			m.Seed = *st.Live.Seed
 		}
-		dist := st.Live.Distribution
-		if dist == "" {
-			dist = jobs.DefaultDistribution
-		}
-		weights, err := configs.ParseDistribution(dist)
-		if err != nil {
-			weights, _ = configs.ParseDistribution(jobs.DefaultDistribution)
-		}
-		for _, model := range configs.Models() {
-			m.Weights = append(m.Weights, views.WeightRow{Model: model, Pct: weights[model]})
-		}
+		counts := countsOf(cat, st.Live, min(max(st.Live.Count, m.MinCount), m.MaxCount))
+		m.Groups, m.Count = countRows(cat, counts), sumCounts(counts)
 	}
 	m.Job = jobModel(s.opt.Jobs.Current())
 	render(w, r, http.StatusOK, views.BuildPage(p, m))
 }
 
-// parseBuild reads the Build form: count, seed and w_<model> percentages,
-// turned into a --distribution string.
-func parseBuild(r *http.Request) (jobs.Request, map[string]int, error) {
+// parseBuild reads the Build form: seed and a count_<model> per model.
+// The fleet total is their sum.
+func parseBuild(r *http.Request, cat *catalogue.Catalogue) (jobs.Request, error) {
 	if err := r.ParseForm(); err != nil {
-		return jobs.Request{}, nil, err
+		return jobs.Request{}, err
 	}
 	var req jobs.Request
 	var err error
-	if req.Count, err = strconv.Atoi(strings.TrimSpace(r.Form.Get("count"))); err != nil {
-		return req, nil, errors.New("devices must be a whole number")
-	}
 	if req.Seed, err = strconv.ParseInt(strings.TrimSpace(r.Form.Get("seed")), 10, 64); err != nil {
-		return req, nil, errors.New("seed must be a whole number")
+		return req, errors.New("seed must be a whole number")
 	}
-	weights := map[string]int{}
-	var parts []string
-	for _, model := range configs.Models() {
-		raw := strings.TrimSpace(r.Form.Get("w_" + model))
+	req.Counts = map[string]int{}
+	for _, model := range cat.ModelIDs() {
+		raw := strings.TrimSpace(r.Form.Get("count_" + model))
 		if raw == "" {
 			continue
 		}
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 || n > 100 {
-			return req, nil, fmt.Errorf("%s: weight must be 0 to 100", model)
+		if err != nil || n < 0 {
+			return req, fmt.Errorf("%s: devices must be a whole number, 0 or more", model)
 		}
-		weights[model] = n
 		if n > 0 {
-			parts = append(parts, model+":"+strconv.Itoa(n))
+			req.Counts[model] = n
 		}
 	}
-	req.Distribution = strings.Join(parts, ",")
-	return req, weights, nil
+	if sumCounts(req.Counts) == 0 {
+		return req, errors.New("set at least one device")
+	}
+	return req, nil
 }
 
-func estimateModel(req jobs.Request, weights map[string]int) views.EstimateModel {
-	m := views.EstimateModel{}
+// estimateModel is the stacked bar of counts by model, in catalogue order.
+func estimateModel(cat *catalogue.Catalogue, counts map[string]int) views.EstimateModel {
+	m := views.EstimateModel{Total: sumCounts(counts)}
+	if m.Total == 0 {
+		return m
+	}
 	x := 0
-	for i, model := range configs.Models() {
-		w := weights[model]
-		m.Total += w
-		if w <= 0 {
+	for i, model := range cat.ModelIDs() {
+		n := counts[model]
+		if n <= 0 {
 			continue
 		}
-		width := min(w, max(0, 100-x))
-		m.Bars = append(m.Bars, views.Bar{Model: model, Pct: w, X: strconv.Itoa(x), W: strconv.Itoa(width),
+		w := n * 100 / m.Total
+		width := max(1, min(w, 100-x))
+		m.Bars = append(m.Bars, views.Bar{Model: model, Count: n, Pct: w, X: strconv.Itoa(x), W: strconv.Itoa(width),
 			Class: views.ModelFills[i%len(views.ModelFills)]})
 		x += width
 	}
@@ -139,8 +207,13 @@ func estimateModel(req jobs.Request, weights map[string]int) views.EstimateModel
 }
 
 func (s *Server) buildEstimate(w http.ResponseWriter, r *http.Request) {
-	req, weights, err := parseBuild(r)
-	m := estimateModel(req, weights)
+	cat, err := s.opt.Catalogue.Get()
+	if err != nil {
+		render(w, r, http.StatusOK, views.EstimatePanel(views.EstimateModel{Err: err.Error()}))
+		return
+	}
+	req, err := parseBuild(r, cat)
+	m := estimateModel(cat, req.Counts)
 	if err != nil {
 		m.Err = err.Error()
 		render(w, r, http.StatusOK, views.EstimatePanel(m))
@@ -183,7 +256,12 @@ func (s *Server) buildBusy() bool {
 }
 
 func (s *Server) buildRun(w http.ResponseWriter, r *http.Request) {
-	req, _, err := parseBuild(r)
+	cat, err := s.opt.Catalogue.Get()
+	if err != nil {
+		s.fail(w, r, err.Error())
+		return
+	}
+	req, err := parseBuild(r, cat)
 	if err != nil {
 		s.fail(w, r, err.Error())
 		return
@@ -197,7 +275,7 @@ func (s *Server) buildRun(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, "Build refused: "+err.Error())
 		return
 	}
-	s.opt.Logger.Info("build started", "job", j.ID, "count", req.Count, "seed", req.Seed, "distribution", req.Distribution)
+	s.opt.Logger.Info("build started", "job", j.ID, "counts", countsLabel(req.Counts), "seed", req.Seed)
 	render(w, r, http.StatusOK, views.JobPanel(*jobModel(j)))
 }
 

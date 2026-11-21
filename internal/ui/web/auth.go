@@ -238,3 +238,48 @@ func (s *Server) hostAllowed(r *http.Request) bool {
 	host = strings.ToLower(strings.Trim(host, "[]"))
 	return s.hosts[host]
 }
+
+// basicRoute reports whether HTTP Basic is accepted for r: the read-only
+// export routes only (Phase 7 item 4), so scripts can fetch exports with
+// curl -u. Everything else needs the session.
+func basicRoute(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	if r.URL.Path == "/devices/export" {
+		return true
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/runs/")
+	if !ok {
+		return false
+	}
+	id, tail, _ := strings.Cut(rest, "/")
+	return id != "" && tail == "export"
+}
+
+// basicAuth checks HTTP Basic credentials on an export route, with the
+// same failed-login slowing as the form. It writes the refusal and
+// returns false when the request may not go on.
+func (s *Server) basicAuth(w http.ResponseWriter, r *http.Request) bool {
+	if !basicRoute(r) {
+		http.Error(w, "HTTP Basic is accepted on the export routes only; log in for everything else", http.StatusUnauthorized)
+		return false
+	}
+	a, addr := s.opt.Auth, remoteAddr(r)
+	user, pass, ok := r.BasicAuth()
+	if a.recentFailures(addr) >= failLimit {
+		s.opt.Logger.Warn("login slowed after repeated failures", "remote", addr, "delay", a.failDelay.String())
+		if wait(r.Context(), a.failDelay) != nil {
+			return false
+		}
+	}
+	if !ok || !a.check(user, pass) {
+		n := a.recordFailure(addr)
+		s.opt.Logger.Warn("login failed", "remote", addr, "via", "basic", "failures_in_window", n)
+		w.Header().Set("WWW-Authenticate", `Basic realm="rcfg-sim-ui exports"`)
+		http.Error(w, "wrong username or password", http.StatusUnauthorized)
+		return false
+	}
+	a.clearFailures(addr)
+	return true
+}

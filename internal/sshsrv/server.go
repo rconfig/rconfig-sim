@@ -73,7 +73,12 @@ type Config struct {
 	// sessions (--active-devices). The rest drop connections like the refuse
 	// profile. Nil means every device.
 	ActiveDevices *int
-	Logger        *slog.Logger
+	// AllowEmpty lets the server start with no devices in the manifest for
+	// this IP and port range (--allow-empty): it binds no SSH listeners but
+	// serves /healthz, /metrics and the admin API, and reports 0 devices.
+	// False keeps the startup error.
+	AllowEmpty bool
+	Logger     *slog.Logger
 }
 
 // Server owns the TCP listeners, SSH handshake machinery, loaded devices,
@@ -105,13 +110,10 @@ type Server struct {
 	devTable  *activity.DeviceTable
 	bus       *activity.Bus
 	startedAt time.Time
-	// mounts are extra handlers for the metrics mux, added by Mount.
-	mounts []mount
-}
-
-type mount struct {
-	pattern string
-	handler http.Handler
+	// The admin API's own listener (D3), set by ServeAdmin; nil when off.
+	adminAddr    string
+	adminHandler http.Handler
+	adminHTTP    *http.Server
 }
 
 // New loads host key + device configs and prepares the Server, but does NOT
@@ -149,7 +151,11 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("load configs: %w", err)
 	}
 	if len(devs) == 0 {
-		return nil, fmt.Errorf("no devices in manifest match %s ports %d..%d", cfg.ListenIP, cfg.PortStart, cfg.PortStart+cfg.PortCount-1)
+		if !cfg.AllowEmpty {
+			return nil, fmt.Errorf("no devices in manifest match %s ports %d..%d", cfg.ListenIP, cfg.PortStart, cfg.PortStart+cfg.PortCount-1)
+		}
+		cfg.Logger.Info("idle: no devices in manifest match this instance; no SSH listeners (--allow-empty)",
+			"listen_ip", cfg.ListenIP, "ports", fmt.Sprintf("%d..%d", cfg.PortStart, cfg.PortStart+cfg.PortCount-1))
 	}
 
 	devMap := make(map[int]*configs.Device, len(devs))
@@ -300,11 +306,31 @@ func (s *Server) StartedAt() time.Time { return s.startedAt }
 // should end on it so Shutdown is not held up.
 func (s *Server) Done() <-chan struct{} { return s.ctx.Done() }
 
-// Mount adds a handler to the metrics HTTP mux, alongside /metrics and
-// /healthz. Call it before Start; it has no effect after. Does nothing when
-// --metrics-addr is empty.
-func (s *Server) Mount(pattern string, h http.Handler) {
-	s.mounts = append(s.mounts, mount{pattern, h})
+// ServeAdmin sets the admin API to serve h on its own listener at addr,
+// which must be a loopback address: the admin API has no authentication
+// (D9). Call it before Start. The metrics listener never serves it.
+func (s *Server) ServeAdmin(addr string, h http.Handler) error {
+	if err := CheckLoopbackAddr(addr); err != nil {
+		return err
+	}
+	s.adminAddr, s.adminHandler = addr, h
+	return nil
+}
+
+// CheckLoopbackAddr reports whether addr is host:port on a loopback
+// address (127.0.0.0/8, ::1 or localhost).
+func CheckLoopbackAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return fmt.Errorf("admin address %q: want host:port", addr)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("admin address %q is not a loopback address: the admin API has no authentication, so it may only listen on 127.0.0.1 (or ::1)", addr)
+	}
+	return nil
 }
 
 // Start binds one listener per port and spawns the per-port accept goroutine.
@@ -331,6 +357,15 @@ func (s *Server) Start() error {
 			return fmt.Errorf("metrics http: %w", err)
 		}
 	}
+	if s.adminHandler != nil {
+		if err := s.startAdminHTTP(); err != nil {
+			s.closeListeners()
+			if s.metricsHTTP != nil {
+				_ = s.metricsHTTP.Close()
+			}
+			return fmt.Errorf("admin http: %w", err)
+		}
+	}
 
 	s.logger.Info("rcfg-sim ready",
 		"listen_ip", s.cfg.ListenIP,
@@ -339,6 +374,7 @@ func (s *Server) Start() error {
 		"devices_loaded", len(s.devices),
 		"total_config_bytes", s.totalMap,
 		"metrics_addr", s.cfg.MetricsAddr,
+		"admin_addr", s.adminAddr,
 		"pid", os.Getpid(),
 	)
 	return nil
@@ -354,9 +390,6 @@ func (s *Server) startMetricsHTTP() error {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", s.metrics.Handler())
-	for _, m := range s.mounts {
-		mux.Handle(m.pattern, m.handler)
-	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
@@ -372,6 +405,25 @@ func (s *Server) startMetricsHTTP() error {
 	}()
 	return nil
 }
+
+// startAdminHTTP binds the admin API's own listener and serves it.
+func (s *Server) startAdminHTTP() error {
+	l, err := net.Listen("tcp", s.adminAddr)
+	if err != nil {
+		return err
+	}
+	s.adminAddr = l.Addr().String() // a :0 port becomes the real one
+	s.adminHTTP = &http.Server{Handler: s.adminHandler, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := s.adminHTTP.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("admin http serve", "err", err)
+		}
+	}()
+	return nil
+}
+
+// AdminAddr is where the admin API listens, once started; "" when off.
+func (s *Server) AdminAddr() string { return s.adminAddr }
 
 func (s *Server) accept(l net.Listener, dev *configs.Device) {
 	defer s.acceptWG.Done()
@@ -412,9 +464,12 @@ func (s *Server) Shutdown(timeout time.Duration) {
 		s.logger.Warn("shutdown timed out waiting for sessions", "timeout", timeout)
 	}
 
-	if s.metricsHTTP != nil {
+	for _, hs := range []*http.Server{s.metricsHTTP, s.adminHTTP} {
+		if hs == nil {
+			continue
+		}
 		mctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = s.metricsHTTP.Shutdown(mctx)
+		_ = hs.Shutdown(mctx)
 		cancel()
 	}
 

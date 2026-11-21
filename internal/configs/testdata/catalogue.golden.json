@@ -1,0 +1,188 @@
+{
+  "families": [
+    {
+      "id": "ip",
+      "name": "Enterprise IP",
+      "description": "Cisco IOS routers and switches in nine size buckets, from access switches to stress-test cores."
+    },
+    {
+      "id": "optical",
+      "name": "Optical transport (TL1)",
+      "description": "TL1 network elements over SSH: Ciena 6500, Infinera DTN-X and Cisco ONS 15454, with gateway and remote nodes."
+    }
+  ],
+  "models": [
+    {
+      "id": "sm",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Access switch: 24 to 48 interfaces, basic VLANs, SNMP, no routing.",
+      "avg_bytes": 25600,
+      "options": []
+    },
+    {
+      "id": "md",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Aggregation or small router: 48 interfaces, OSPF, small ACLs, logging.",
+      "avg_bytes": 192500,
+      "options": []
+    },
+    {
+      "id": "lg",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Core router: multi-area OSPF, BGP (10 neighbours), large ACLs, QoS, crypto maps.",
+      "avg_bytes": 940000,
+      "options": []
+    },
+    {
+      "id": "xl",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "DC core or firewall: massive ACLs, VRFs, extensive BGP, prefix-lists, route-maps.",
+      "avg_bytes": 3180000,
+      "options": []
+    },
+    {
+      "id": "2xl",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Stress, hyperscale edge: 256 interfaces, 100 ACLs, 6K static routes, 30 BGP, 50 VRFs.",
+      "avg_bytes": 6200000,
+      "options": []
+    },
+    {
+      "id": "3xl",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Stress, regional spine: 384 interfaces, 160 ACLs, 12K static routes, 40 BGP, 70 VRFs.",
+      "avg_bytes": 12700000,
+      "options": []
+    },
+    {
+      "id": "4xl",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Stress, SP core: 512 interfaces, 240 ACLs, 24K static routes, 60 BGP, 100 VRFs.",
+      "avg_bytes": 24700000,
+      "options": []
+    },
+    {
+      "id": "5xl",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Stress, pathological: 768 interfaces, 380 ACLs, 48K static routes, 100 BGP, 150 VRFs.",
+      "avg_bytes": 52100000,
+      "options": []
+    },
+    {
+      "id": "6xl",
+      "family": "ip",
+      "vendor": "Cisco",
+      "driver": "cisco_ios",
+      "protocol": "cli",
+      "description": "Stress, max: 1024 interfaces, 600 ACLs, 96K static routes, 160 BGP, 220 VRFs.",
+      "avg_bytes": 106700000,
+      "options": []
+    },
+    {
+      "id": "ciena-6500-tl1",
+      "family": "optical",
+      "vendor": "Ciena",
+      "driver": "ciena_tl1",
+      "protocol": "tl1",
+      "description": "Ciena 6500 node: ACT-USER login, then RTRV-EQPT shelf inventory (7-slot 6500). No remote NEs.",
+      "avg_bytes": 1700,
+      "options": []
+    },
+    {
+      "id": "ciena-6500-tl1-gne",
+      "family": "optical",
+      "vendor": "Ciena",
+      "driver": "ciena_tl1",
+      "protocol": "tl1",
+      "description": "Ciena 6500 gateway NE fronting 2 to 5 remote NEs, addressed by TID; RTRV-NE-LIST lists them.",
+      "avg_bytes": 7300,
+      "options": [
+        {
+          "name": "rne_dual_home_pct",
+          "flag": "--rne-dual-home-pct",
+          "type": "int",
+          "min": 0,
+          "max": 100,
+          "default": 0,
+          "help": "Percent of each gateway's remote NEs drawn from a shared pool, so the same RNE is reachable through more than one gateway."
+        }
+      ]
+    },
+    {
+      "id": "infinera-dtnx-tl1",
+      "family": "optical",
+      "vendor": "Infinera",
+      "driver": "infinera_tl1",
+      "protocol": "tl1",
+      "description": "Infinera DTN-X node fronting 12 to 30 remote nodes; paged RTRV-TIDMAP and per-node inventories.",
+      "avg_bytes": 7400,
+      "options": []
+    },
+    {
+      "id": "cisco-ons15454-tl1",
+      "family": "optical",
+      "vendor": "Cisco",
+      "driver": "cisco_ons_tl1",
+      "protocol": "tl1",
+      "description": "Cisco ONS 15454 gateway NE fronting 3 to 8 end NEs; positional RTRV-MAP-NETWORK records and per-ENE inventories.",
+      "avg_bytes": 2950,
+      "options": []
+    }
+  ],
+  "drivers": [
+    {
+      "id": "cisco_ios",
+      "vendor": "Cisco",
+      "protocol": "cli",
+      "requires_ssh_auth": true
+    },
+    {
+      "id": "junos",
+      "vendor": "Juniper",
+      "protocol": "cli",
+      "requires_ssh_auth": true
+    },
+    {
+      "id": "ciena_tl1",
+      "vendor": "Ciena",
+      "protocol": "tl1",
+      "requires_ssh_auth": false
+    },
+    {
+      "id": "infinera_tl1",
+      "vendor": "Infinera",
+      "protocol": "tl1",
+      "requires_ssh_auth": false
+    },
+    {
+      "id": "cisco_ons_tl1",
+      "vendor": "Cisco",
+      "protocol": "tl1",
+      "requires_ssh_auth": false
+    }
+  ]
+}

@@ -15,10 +15,15 @@ import (
 
 	"github.com/a-h/templ"
 
+	"github.com/rcfg-sim/rcfg-sim/internal/admin"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/catalogue"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/fleet"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/inventory"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/jobs"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/presets"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/runs"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/systemd"
+	"github.com/rcfg-sim/rcfg-sim/internal/ui/testbench"
 	"github.com/rcfg-sim/rcfg-sim/internal/ui/web/views"
 )
 
@@ -35,7 +40,23 @@ type Options struct {
 	Units   *systemd.Ctl
 	Presets *presets.Store
 	Jobs    *jobs.Runner // build jobs; nil disables the Build screen
-	Auth    *Auth        // the login; required
+	// Bench, Testbenches and Runs are the testbench lifecycle and records
+	// (Phase 6); nil Bench disables the Testbenches screen, nil Runs the
+	// Runs screen.
+	Bench       *testbench.Manager
+	Testbenches *testbench.Store
+	Runs        *runs.Store
+	// Inventory caches parsed manifests for the Devices screen (Phase 7);
+	// nil makes one. DataDir holds the first-login checklist state; ""
+	// keeps it in memory only.
+	Inventory *inventory.Cache
+	DataDir   string
+	// Catalogue is the generator's device catalogue (D14): every model and
+	// family the UI shows comes from it. Required.
+	Catalogue *catalogue.Source
+	// TestLogin runs a device's Test login; nil means inventory.TestLogin.
+	TestLogin func(ctx context.Context, addr string, d inventory.Device, timeout time.Duration) inventory.LoginResult
+	Auth      *Auth // the login; required
 	// ListenAddr and AllowedHosts make the Host header allow-list
 	// (section 8): the listen address, localhost, 127.0.0.1 and these.
 	ListenAddr   string
@@ -62,6 +83,15 @@ type Server struct {
 
 	rollMu  sync.Mutex
 	rolling views.RollingView
+
+	inv       *inventory.Cache
+	testLogin func(ctx context.Context, addr string, d inventory.Device, timeout time.Duration) inventory.LoginResult
+	devMu     sync.Mutex // the Devices screen's device-table cache
+	devCache  map[string]*admin.Devices
+	devAt     time.Time
+	testMu    sync.Mutex // one Test login per browser session
+	testing   map[string]bool
+	clMu      sync.Mutex // the checklist file
 }
 
 // New returns the UI server. opt.Auth is required: there is no mode
@@ -69,6 +99,9 @@ type Server struct {
 func New(opt Options) *Server {
 	if opt.Auth == nil {
 		panic("web.New: Options.Auth is required")
+	}
+	if opt.Catalogue == nil {
+		panic("web.New: Options.Catalogue is required")
 	}
 	if opt.Logger == nil {
 		opt.Logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -85,7 +118,14 @@ func New(opt Options) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{opt: opt, mux: http.NewServeMux(), ctx: ctx, cancel: cancel,
 		hub:   NewHub(opt.Fleet, opt.Logger, opt.FrameEvery),
-		hosts: allowedHosts(opt.ListenAddr, opt.AllowedHosts)}
+		hosts: allowedHosts(opt.ListenAddr, opt.AllowedHosts),
+		inv:   opt.Inventory, testLogin: opt.TestLogin, testing: map[string]bool{}}
+	if s.inv == nil {
+		s.inv = inventory.NewCache()
+	}
+	if s.testLogin == nil {
+		s.testLogin = inventory.TestLogin
+	}
 	s.routes()
 	return s
 }
@@ -129,6 +169,39 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /build/rollback", s.buildRollback)
 	s.mux.HandleFunc("GET /build/jobs/{id}/stream", s.buildJobStream)
 
+	s.mux.HandleFunc("GET /testbenches", s.testbenchesPage)
+	s.mux.HandleFunc("GET /bench/pill", s.benchPillView)
+	s.mux.HandleFunc("GET /testbenches/new", s.testbenchNew)
+	s.mux.HandleFunc("GET /testbenches/preset", s.testbenchPreset)
+	s.mux.HandleFunc("GET /testbenches/override-row", s.overrideRow)
+	s.mux.HandleFunc("POST /testbenches/save", s.testbenchSave)
+	s.mux.HandleFunc("POST /testbenches/flow", s.testbenchFlow)
+	s.mux.HandleFunc("POST /testbenches/import", s.testbenchImport)
+	s.mux.HandleFunc("POST /bench/{verb}", s.benchAction)
+	s.mux.HandleFunc("GET /testbenches/{slug}", s.testbenchEdit)
+	s.mux.HandleFunc("GET /testbenches/{slug}/export", s.testbenchExport)
+	s.mux.HandleFunc("POST /testbenches/{slug}/start", s.testbenchStart)
+	s.mux.HandleFunc("POST /testbenches/{slug}/duplicate", s.testbenchDuplicate)
+	s.mux.HandleFunc("POST /testbenches/{slug}/delete", s.testbenchDelete)
+
+	s.mux.HandleFunc("GET /scenarios", s.scenariosPage)
+	s.mux.HandleFunc("GET /scenarios/{id}", s.scenariosPage)
+
+	s.mux.HandleFunc("GET /runs", s.runsPage)
+	s.mux.HandleFunc("GET /runs/compare", s.runsCompare)
+	s.mux.HandleFunc("GET /runs/{id}", s.runPage)
+	s.mux.HandleFunc("GET /runs/{id}/export", s.runExport)
+	s.mux.HandleFunc("POST /runs/{id}/notes", s.runNotes)
+
+	s.mux.HandleFunc("GET /devices", s.devicesPage)
+	s.mux.HandleFunc("GET /devices/find", s.devicesFind)
+	s.mux.HandleFunc("GET /devices/export", s.devicesExport)
+	s.mux.HandleFunc("GET /device/{host}", s.deviceDrawer)
+	s.mux.HandleFunc("POST /device/{host}/test-login", s.deviceTestLogin)
+	s.mux.HandleFunc("POST /testbenches/{slug}/keep-build", s.testbenchKeepBuild)
+	s.mux.HandleFunc("GET /checklist", s.checklistView)
+	s.mux.HandleFunc("POST /checklist/dismiss", s.checklistDismiss)
+
 	s.mux.HandleFunc("GET /failures", s.failuresPage)
 	s.mux.HandleFunc("GET /failures/rule-row", s.ruleRow)
 	s.mux.HandleFunc("GET /failures/presets", s.presetList)
@@ -161,6 +234,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	public := strings.HasPrefix(r.URL.Path, "/static/") || r.URL.Path == "/login" || r.URL.Path == "/healthz"
+	if !public && !s.opt.Auth.Valid(sessionID(r)) && r.Header.Get("Authorization") != "" {
+		// HTTP Basic, for scripts: the read-only export routes only.
+		if !s.basicAuth(w, r) {
+			return
+		}
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 	if !public && !s.opt.Auth.Valid(sessionID(r)) {
 		switch {
 		case r.Header.Get("HX-Request") == "true" || strings.Contains(r.Header.Get("Accept"), "text/event-stream"):
@@ -246,14 +327,8 @@ func render(w http.ResponseWriter, r *http.Request, status int, c templ.Componen
 
 // page builds the layout model from the last poll.
 func (s *Server) page(title, nav string) views.Page {
-	vs := s.opt.Fleet.Views()
-	up := 0
-	for _, v := range vs {
-		if v.Status == fleet.StatusUp {
-			up++
-		}
-	}
-	return views.Page{Title: title, Nav: nav, Up: up, Total: len(vs), User: s.opt.Auth.Username()}
+	up, total := views.Health(s.opt.Fleet.Views())
+	return views.Page{Title: title, Nav: nav, Up: up, Total: total, User: s.opt.Auth.Username(), Bench: s.benchPill()}
 }
 
 // flash answers an action with result messages, empties the pending bar and

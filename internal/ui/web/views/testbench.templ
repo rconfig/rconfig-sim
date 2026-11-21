@@ -1,0 +1,541 @@
+package views
+
+import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
+
+// BenchPillView is the active testbench pill in the header (10.5). Its
+// name opens the running run; the devices link opens the run's Devices
+// view. It refreshes itself every few seconds.
+templ BenchPillView(b BenchPill) {
+	<div id="bench-pill" hx-get="/bench/pill" hx-trigger="every 3s, bench-changed from:body" hx-swap="outerHTML" class="flex items-center gap-2">
+		if b.State != "" && b.State != "idle" {
+			@ui.PillLink(benchPillKind(b.State), benchRunHref(b), templ.Attributes{"title": b.Error}) {
+				{ b.Name } · { b.State }
+				if b.Elapsed != "" {
+					· { b.Elapsed }
+				}
+				if b.StopIn != "" {
+					· stops in { b.StopIn }
+				}
+			}
+			if b.RunID != "" {
+				@ui.LinkButton(ui.Ghost, ui.Small, "/devices?run="+b.RunID, templ.Attributes{"aria-label": "Devices of this run", "title": "Devices of this run"}) {
+					<span aria-hidden="true">▦</span>
+				}
+			}
+			if b.Modified {
+				@ui.Badge(ui.BadgeWarn, "modified")
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/save", "hx-target": "#flash", "hx-confirm": "Save the fleet's current settings into this testbench (a new version)?"}) {
+					Save to testbench
+				}
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/revert", "hx-target": "#flash", "hx-confirm": "Undo the changes made during this run and re-apply the testbench's settings?"}) {
+					Revert
+				}
+			}
+			if b.State == "running" {
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/restart", "hx-target": "#flash", "hx-confirm": "Restart every instance, one at a time, with the same testbench?"}) {
+					Restart
+				}
+			}
+			if b.State == "running" || b.State == "failed" {
+				@ui.ConfirmButton("Stop every instance and end this run?", ui.Small, templ.Attributes{"hx-post": "/bench/stop", "hx-target": "#flash"}) {
+					Stop
+				}
+			}
+			if b.State == "failed" {
+				@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"hx-post": "/bench/dismiss", "hx-target": "#flash"}) {
+					Dismiss
+				}
+			}
+		}
+	</div>
+}
+
+// TestbenchesPage is the Testbenches list (10.5), grouped by kind.
+templ TestbenchesPage(p Page, m TestbenchesModel) {
+	@Layout(p) {
+		<div class="flex flex-wrap items-baseline justify-between gap-4">
+			<h1 class="text-2xl">Testbenches</h1>
+			@ui.LinkButton(ui.Primary, "", "/testbenches/new", nil) {
+				New testbench
+			}
+		</div>
+		<p class="mt-2 text-muted">A testbench is a device fleet plus the behaviour to run on it. Starting one builds or reuses its configs, applies its settings and records a run.</p>
+		if m.Err != "" {
+			<div class="mt-4">
+				@ui.Toast(ui.ToastError, "Some testbench files could not be read: "+m.Err, nil)
+			</div>
+		}
+		<form method="get" action="/testbenches" hx-get="/testbenches" hx-trigger="change" hx-target="#bench-groups" hx-select="#bench-groups" hx-swap="outerHTML" hx-push-url="true" class="mt-6">
+			@ui.Segmented("show", m.Show, "Show", []ui.Option{{Value: "", Label: "All"}, {Value: "shipped", Label: "Shipped"}, {Value: "yours", Label: "Yours"}}, nil)
+			<noscript>
+				@ui.Submit(ui.Secondary, nil) {
+					Filter
+				}
+			</noscript>
+		</form>
+		<div id="bench-groups" class="mt-6 flex flex-col gap-8">
+			for _, g := range m.Groups {
+				<section aria-label={ g.Title }>
+					<h2 class="text-lg">{ g.Title }</h2>
+					if g.Help != "" {
+						<p class="text-muted">{ g.Help }</p>
+					}
+					<div class="mt-3">
+						@benchTable(g.Rows)
+					</div>
+				</section>
+			}
+			if len(m.Groups) == 0 {
+				@ui.Empty("No testbenches", benchEmpty(m.Show)) {
+					@ui.LinkButton(ui.Secondary, ui.Small, "/testbenches/new", nil) {
+						New testbench
+					}
+				}
+			}
+		</div>
+		<div class="mt-8">
+			@ui.Card("Import a testbench", "Upload a testbench JSON file exported from this or another rcfg-sim-ui.") {
+				<form hx-post="/testbenches/import" hx-encoding="multipart/form-data" hx-target="#flash" class="flex flex-wrap items-center gap-3">
+					@ui.Input(templ.Attributes{"type": "file", "name": "file", "accept": "application/json,.json", "required": true, "aria-label": "Testbench JSON file"})
+					@ui.Submit(ui.Secondary, nil) {
+						Import
+					}
+				</form>
+			}
+		</div>
+		<div id="bench-job" class="mt-6">
+			if m.Job != nil {
+				@JobPanel(*m.Job)
+			}
+		</div>
+	}
+}
+
+templ benchTable(rows []TestbenchRow) {
+	@ui.Table(nil) {
+		<thead>
+			<tr>
+				<th>Name</th>
+				<th class="text-right">Devices</th>
+				<th>Duration</th>
+				<th>Last run</th>
+				<th>This host</th>
+				<th></th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, r := range rows {
+				<tr class="align-top">
+					<td>
+						<a href={ templ.SafeURL("/testbenches/" + r.Slug) } class="font-medium">{ r.Name }</a>
+						<span class="num text-muted">v{ itoa(r.Version) }</span>
+						for _, f := range r.Families {
+							@ui.Badge(ui.BadgeFamily, f)
+						}
+						if r.Shipped {
+							@ui.Badge(ui.BadgeMuted, "Shipped")
+						} else {
+							@ui.Badge(ui.BadgeInfo, "Yours")
+						}
+						if r.Active {
+							@ui.Badge(ui.BadgeOK, "active")
+						}
+						if r.Description != "" {
+							<p class="mt-1 text-muted">{ r.Description }</p>
+						}
+					</td>
+					<td class="num text-right">{ Thousands(r.Devices) }</td>
+					<td class="num">{ orDash(r.Duration) }</td>
+					<td class="num">
+						if r.LastRunID != "" {
+							<a href={ templ.SafeURL("/runs/" + r.LastRunID) }>{ r.LastRun }</a>
+						} else {
+							<span class="text-muted">never</span>
+						}
+					</td>
+					<td>
+						if r.Problem != "" {
+							@ui.Badge(ui.BadgeWarn, "needs attention")
+							<p class="mt-1 text-st-auth">{ r.Problem }</p>
+						} else if len(r.Fit) == 0 {
+							@ui.Badge(ui.BadgeOK, "fits")
+						} else {
+							@ui.Badge(ui.BadgeError, "doesn't fit this host")
+							<ul class="mt-1 list-disc pl-4 text-st-error">
+								for _, f := range r.Fit {
+									<li>{ f }</li>
+								}
+							</ul>
+						}
+					</td>
+					<td>
+						<div class="flex flex-wrap justify-end gap-2">
+							if len(r.Fit) == 0 && r.Problem == "" {
+								@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/testbenches/" + r.Slug + "/start", "hx-target": "#bench-job", "hx-confirm": "Start " + r.Name + "? It may generate configs and restart instances."}) {
+									Start
+								}
+							}
+							@ui.LinkButton(ui.Secondary, ui.Small, "/devices?testbench="+r.Slug, nil) {
+								Devices
+							}
+							@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/testbenches/" + r.Slug + "/duplicate", "hx-target": "#flash"}) {
+								Duplicate
+							}
+							@ui.LinkButton(ui.Ghost, ui.Small, "/testbenches/"+r.Slug+"/export", templ.Attributes{"download": true}) {
+								Export
+							}
+							if !r.Shipped {
+								@ui.ConfirmButton("Delete "+r.Name+"? Its runs are kept.", ui.Small, templ.Attributes{"hx-post": "/testbenches/" + r.Slug + "/delete", "hx-target": "#flash"}) {
+									Delete
+								}
+							}
+						</div>
+					</td>
+				</tr>
+			}
+		</tbody>
+	}
+}
+
+// ReplaceConfirm asks before stopping the active testbench to start another.
+templ ReplaceConfirm(active, slug, name string) {
+	@ui.Toast(ui.ToastWarn, active+" is active. Starting "+name+" stops every instance and ends that run first.", nil)
+	@ui.Button(ui.Primary, "", templ.Attributes{"hx-post": "/testbenches/" + slug + "/start?replace=1", "hx-target": "#bench-job"}) {
+		Stop { active } and start { name }
+	}
+}
+
+// FlowPage is the guided testbench flow (10.5) on its own page.
+templ FlowPage(p Page, m FlowModel) {
+	@Layout(p) {
+		<div class="flex flex-wrap items-baseline justify-between gap-4">
+			<h1 class="text-2xl">
+				if m.Editing {
+					{ m.Name } <span class="num text-sm text-muted">v{ itoa(m.Version) }</span>
+				} else {
+					New testbench
+				}
+			</h1>
+			<div class="flex gap-2">
+				if m.Editing {
+					@ui.LinkButton(ui.Secondary, "", "/devices?testbench="+m.Slug, nil) {
+						Devices
+					}
+				}
+				<a href="/testbenches" class="py-2 text-muted">All testbenches</a>
+			</div>
+		</div>
+		@Flow(m)
+	}
+}
+
+// Flow is the flow's form; every step posts it back and swaps it whole.
+templ Flow(m FlowModel) {
+	<form id="bench-flow" hx-post="/testbenches/flow" hx-target="#bench-flow" hx-swap="outerHTML" class="mt-6 flex flex-col gap-6">
+		<input type="hidden" name="draft" value={ m.Draft }/>
+		<input type="hidden" name="at" value={ itoa(m.Step) }/>
+		@ui.Stepper(m.Steps, m.Step)
+		if m.Error != "" {
+			@ui.Toast(ui.ToastError, m.Error, nil)
+		}
+		switch m.Step {
+			case 0:
+				@flowKind(m)
+			case 1:
+				@flowDevices(m)
+			case 2:
+				@flowBehaviour(m)
+			default:
+				@flowReview(m)
+		}
+	</form>
+}
+
+templ stepNav(m FlowModel, summary, next string) {
+	@ui.Actions(summary) {
+		if m.Step > 0 {
+			@ui.Submit(ui.Secondary, templ.Attributes{"name": "goto", "value": itoa(m.Step - 1)}) {
+				Back
+			}
+		}
+		@ui.Submit(ui.Primary, templ.Attributes{"name": "goto", "value": itoa(m.Step + 1)}) {
+			{ next }
+		}
+	}
+}
+
+templ flowKind(m FlowModel) {
+	if m.Editing {
+		@ui.Card("What are you testing?", "") {
+			<p>{ m.KindLabel }. To make a testbench of another kind from this one, use Duplicate on the list, then change the copy.</p>
+		}
+		@stepNav(m, "", "Next: devices")
+	} else {
+		@ui.ChoiceCards("kind", m.Kind, "What are you testing?", m.KindChoices, nil)
+		if m.Kind == "shipped" {
+			@ui.Card("Start from a shipped testbench", "Pick one; you get an editable copy.") {
+				@ui.ChoiceCards("from", m.From, "Shipped testbenches", m.ShippedChoices, nil)
+			}
+		}
+		@stepNav(m, "Choose what you are testing; the next step shows only the devices that apply.", "Next: devices")
+	}
+}
+
+templ flowDevices(m FlowModel) {
+	if m.ShowScenario {
+		@ui.Card("Topology scenario", "A curated package: its devices, configs and command files come as they are. Pick one; the Scenarios screen shows each in full.") {
+			@ui.ChoiceCards("scenario", m.Scenario, "Scenario", m.ScenarioChoices, nil)
+		}
+		if len(m.Fit) > 0 {
+			@ui.Toast(ui.ToastWarn, "Does not fit this host yet: it can be saved, but not started here.", m.Fit)
+		}
+		@stepNav(m, m.EstimateLine, "Next: behaviour")
+	} else {
+		@flowGenerated(m)
+	}
+}
+
+templ flowGenerated(m FlowModel) {
+	if m.ShowIP {
+		@ui.Card("Enterprise IP devices", "Cisco IOS routers and switches. Set how many of each size you want.") {
+			<div class="mb-3 flex flex-wrap items-center gap-2">
+				<span class="text-muted">Presets</span>
+				for _, p := range m.IPPresets {
+					@ui.Submit(ui.Secondary, templ.Attributes{"name": "preset", "value": p.Value, "class": "btn-sm", "title": p.Help}) {
+						{ p.Label }
+					}
+				}
+			</div>
+			for _, c := range m.IPRows {
+				@ui.CountRow(c)
+			}
+			<p class="mt-3 text-right">IP subtotal <span class="num font-semibold">{ Thousands(m.IPTotal) }</span></p>
+		}
+	}
+	if m.ShowOptical {
+		@ui.Card("Optical transport devices (TL1)", "TL1 network elements reached over SSH. Each line says what the model emulates.") {
+			for _, c := range m.OpticalRows {
+				@ui.CountRow(c)
+			}
+			<p class="mt-3 text-right">Optical subtotal <span class="num font-semibold">{ Thousands(m.OpticalTotal) }</span></p>
+			<div class="mt-4 flex flex-col gap-4 border-t border-line pt-4">
+				@ui.Segmented("ssh_auth", m.SSHAuth, "SSH login", m.SSHChoices, nil)
+				<span class="-mt-2">
+					@ui.Badge(ui.BadgeWarn, "restart needed when changed")
+				</span>
+				for _, o := range m.Options {
+					@ui.Field(o.Label, o.Help+" Applies to "+o.Models+". Flag "+o.Flag+".") {
+						@ui.Slider("opt-"+o.Name, "opt_"+o.Name, "%", itoa(o.Min), itoa(o.Max), "1", itoa(o.Value), nil, nil)
+					}
+				}
+				if m.DualHome {
+					@dualHomeDiagram()
+				}
+			</div>
+		}
+	}
+	@ui.Advanced(seedChanged(m.Seed)) {
+		@ui.Field("Seed", "Same seed and same counts make the same configs, so a kept build is reused (flag --seed).") {
+			@ui.NumberInput(templ.Attributes{"name": "seed", "step": "1", "value": i64(m.Seed), "class": "w-40"})
+		}
+	}
+	if len(m.Fit) > 0 {
+		@ui.Toast(ui.ToastWarn, "Does not fit this host yet: it can be saved, but not started here.", m.Fit)
+	}
+	@stepNav(m, m.EstimateLine, "Next: behaviour")
+}
+
+// dualHomeDiagram shows what a dual-homed remote NE is: one RNE reachable
+// through two gateways.
+templ dualHomeDiagram() {
+	<figure class="flex flex-col gap-1">
+		<svg viewBox="0 0 320 120" class="h-28 w-full max-w-sm" role="img" aria-label="Two gateway NEs; one remote NE behind each, and a shared remote NE reachable through both">
+			<g class="fill-panel-2 stroke-line" stroke-width="1">
+				<rect x="40" y="10" width="80" height="28" rx="6"></rect>
+				<rect x="200" y="10" width="80" height="28" rx="6"></rect>
+				<rect x="10" y="80" width="70" height="28" rx="6"></rect>
+				<rect x="125" y="80" width="70" height="28" rx="6" class="stroke-accent-500"></rect>
+				<rect x="240" y="80" width="70" height="28" rx="6"></rect>
+			</g>
+			<g class="stroke-muted" stroke-width="1.5">
+				<line x1="80" y1="38" x2="45" y2="80"></line>
+				<line x1="240" y1="38" x2="275" y2="80"></line>
+			</g>
+			<g class="stroke-accent-500" stroke-width="2">
+				<line x1="80" y1="38" x2="160" y2="80"></line>
+				<line x1="240" y1="38" x2="160" y2="80"></line>
+			</g>
+			<g class="fill-fg text-[10px]" text-anchor="middle">
+				<text x="80" y="28">GNE A</text>
+				<text x="240" y="28">GNE B</text>
+				<text x="45" y="98">RNE</text>
+				<text x="160" y="98">shared RNE</text>
+				<text x="275" y="98">RNE</text>
+			</g>
+		</svg>
+		<figcaption class="field-hint">A dual-homed RNE is reachable through more than one gateway, as real optical networks are built for resilience.</figcaption>
+	</figure>
+}
+
+templ flowBehaviour(m FlowModel) {
+	@benchBehaviour(m.Behaviour)
+	@stepNav(m, "The same behaviour settings for every kind of testbench.", "Next: review")
+}
+
+templ flowReview(m FlowModel) {
+	@ui.Card("Name it", "") {
+		<div class="grid gap-3 sm:grid-cols-2">
+			@ui.Field("Name", "") {
+				@ui.Input(templ.Attributes{"name": "name", "required": true, "maxlength": "64", "value": m.Name})
+			}
+			@ui.Field("Description", "One line saying what this testbench is for.") {
+				@ui.Input(templ.Attributes{"name": "description", "maxlength": "500", "value": m.Description})
+			}
+		</div>
+	}
+	@ui.Card("Device mix", "") {
+		<svg class="h-4 w-full rounded-sm" viewBox="0 0 100 4" preserveAspectRatio="none" role="img" aria-label="Device mix by model">
+			<rect width="100" height="4" class="fill-panel-2"></rect>
+			for _, s := range m.Mix {
+				<rect x={ s.X } width={ s.W } height="4" class={ s.Class }><title>{ s.Label } { Thousands(s.N) }</title></rect>
+			}
+		</svg>
+		<ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+			for _, s := range m.Mix {
+				<li class="flex items-center gap-1"><svg class="size-2.5" viewBox="0 0 1 1" aria-hidden="true"><rect width="1" height="1" class={ s.Class }></rect></svg><span class="num">{ s.Label } { Thousands(s.N) }</span></li>
+			}
+		</ul>
+	}
+	@ui.Card("What will happen", "") {
+		<ul class="list-disc pl-5">
+			for _, h := range m.Happen {
+				<li>{ h }</li>
+			}
+		</ul>
+		if len(m.Problems) > 0 {
+			<div class="mt-3">
+				@ui.Toast(ui.ToastError, "Fix these before saving:", m.Problems)
+			</div>
+		}
+	}
+	@ui.Actions(m.Summary) {
+		@ui.Submit(ui.Secondary, templ.Attributes{"name": "goto", "value": "2"}) {
+			Back
+		}
+		if !m.Shipped && m.Editing {
+			@ui.Submit(ui.Secondary, templ.Attributes{"hx-post": "/testbenches/save", "hx-target": "#flash"}) {
+				Save
+			}
+		} else {
+			@ui.Submit(ui.Secondary, templ.Attributes{"hx-post": "/testbenches/save?as=1", "hx-target": "#flash"}) {
+				Save
+			}
+		}
+		@ui.Submit(ui.Primary, templ.Attributes{"hx-post": saveStartURL(m), "hx-target": "#flash"}) {
+			Save and start
+		}
+	}
+}
+
+// benchBehaviour is the behaviour step: faults and profiles (a preset can
+// load them), delays, session cap, active devices, overrides, duration.
+templ benchBehaviour(m TestbenchEditModel) {
+	@ui.Card("Faults and profiles", "Fleet-wide. Per-instance overrides are below.") {
+		<div id="bench-failures">
+			@BenchFailures(m)
+		</div>
+		if len(m.Presets) > 0 {
+			<div class="mt-4 flex flex-wrap items-end gap-2 border-t border-line pt-3">
+				@ui.Field("Load a preset", "") {
+					@ui.Select("preset", "", presetOptions(m.Presets), templ.Attributes{"id": "bench-preset"})
+				}
+				@ui.Button(ui.Secondary, "", templ.Attributes{"hx-get": "/testbenches/preset", "hx-include": "#bench-preset", "hx-target": "#bench-failures"}) {
+					Load
+				}
+			</div>
+		}
+	}
+	@ui.Card("Behaviour", "") {
+		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+			@ui.Field("Delay min (ms)", "Shortest wait before each command's answer.") {
+				@ui.NumberInput(templ.Attributes{"name": "delay_min", "min": "0", "value": i64(m.DelayMin)})
+			}
+			@ui.Field("Delay max (ms)", "Longest wait; each answer waits a random time between the two.") {
+				@ui.NumberInput(templ.Attributes{"name": "delay_max", "min": "0", "value": i64(m.DelayMax)})
+			}
+			@ui.Field("Session cap per instance", "Concurrent sessions each instance admits; more are refused.") {
+				@ui.NumberInput(templ.Attributes{"name": "max_sessions", "min": "1", "value": i64(m.MaxSessions)})
+			}
+			@ui.Field("Active devices (fleet)", "\"all\", or how many devices answer, split across instances by device count.") {
+				@ui.Input(templ.Attributes{"name": "active", "value": m.Active, "placeholder": "all", "class": "num"})
+			}
+		</div>
+		<div class="mt-4">
+			@ui.Field("Stop after (optional)", "The testbench stops itself after this long, for example 90m or 2h. Empty runs until you stop it.") {
+				@ui.Input(templ.Attributes{"name": "duration", "value": m.Duration, "placeholder": "e.g. 90m or 2h", "class": "num w-40"})
+			}
+		</div>
+	}
+	@ui.Advanced(len(m.Overrides)) {
+		<p class="text-muted">Per-instance overrides: leave a field empty to use the fleet value. Faults as type=rate pairs (auth_fail=0.1,slow_response=0.05); rules comma-separated.</p>
+		<div id="bench-overrides" class="flex flex-col gap-3">
+			for _, o := range m.Overrides {
+				@OverrideRowView(o, m.Instances)
+			}
+		</div>
+		<div>
+			@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-get": "/testbenches/override-row", "hx-target": "#bench-overrides", "hx-swap": "beforeend"}) {
+				Add override
+			}
+		</div>
+	}
+}
+
+// BenchFailures is the faults and profile rules, swapped whole when a
+// preset is loaded.
+templ BenchFailures(m TestbenchEditModel) {
+	<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+		for _, f := range m.Faults {
+			@ui.Field(f.Label+" (%)", f.Help+".") {
+				@ui.NumberInput(templ.Attributes{"name": "f_" + f.Type, "min": "0", "max": "100", "step": "any", "value": pctStr(f.Pct)})
+			}
+		}
+	</div>
+	<div class="mt-3 grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
+		@ui.Field("Profile seed", "Picks which devices get each profile; the same seed picks the same devices.") {
+			@ui.NumberInput(templ.Attributes{"name": "profile_seed", "step": "1", "value": i64(m.ProfileSeed)})
+		}
+		@ui.Field("Profile rules, one per line", "For example latency:300-1500ms@15% or hang:600s@1%. Shares add up to at most 100%.") {
+			@ui.Textarea(m.Rules, templ.Attributes{"name": "rules", "rows": "3", "class": "num"})
+		}
+	</div>
+}
+
+// OverrideRowView is one per-instance override.
+templ OverrideRowView(o OverrideRow, instances []string) {
+	<fieldset class="grid gap-2 rounded-md border border-line p-3 sm:grid-cols-4 lg:grid-cols-8">
+		@ui.Field("Instance", "") {
+			@ui.Select("ov_ip", o.IP, instanceOptions(o.IP, instances), nil)
+		}
+		<span class="sm:col-span-2">
+			@ui.Field("Faults", "") {
+				@ui.Input(templ.Attributes{"name": "ov_faults", "value": o.Faults, "class": "num"})
+			}
+		</span>
+		@ui.Field("Profile seed", "") {
+			@ui.Input(templ.Attributes{"name": "ov_profile_seed", "value": o.ProfileSeed, "class": "num"})
+		}
+		@ui.Field("Rules", "") {
+			@ui.Input(templ.Attributes{"name": "ov_rules", "value": o.Rules, "class": "num"})
+		}
+		@ui.Field("Delay ms (min-max)", "") {
+			@ui.Input(templ.Attributes{"name": "ov_delay", "value": joinDelay(o.DelayMin, o.DelayMax), "placeholder": "50-500", "class": "num"})
+		}
+		@ui.Field("Session cap", "") {
+			@ui.Input(templ.Attributes{"name": "ov_max_sessions", "value": o.MaxSessions, "class": "num"})
+		}
+		@ui.Field("Active devices", "") {
+			@ui.Input(templ.Attributes{"name": "ov_active", "value": o.Active, "class": "num"})
+		}
+	</fieldset>
+}

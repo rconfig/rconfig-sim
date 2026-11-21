@@ -2,6 +2,7 @@ package sshsrv
 
 import (
 	"fmt"
+	"github.com/rcfg-sim/rcfg-sim/internal/drivers"
 	"strings"
 )
 
@@ -29,7 +30,7 @@ func (cienaTL1) Name() string { return "ciena_tl1" }
 // RequiresSSHAuth: Ciena TL1 authenticates in-band via ACT-USER, so the SSH
 // transport can accept the connection without a password challenge.
 
-func (cienaTL1) RequiresSSHAuth() bool { return false }
+func (cienaTL1) RequiresSSHAuth() bool { return drivers.RequiresSSHAuth("ciena_tl1") }
 
 func (cienaTL1) Commands() []string {
 	return []string{

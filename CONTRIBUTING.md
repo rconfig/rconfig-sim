@@ -43,6 +43,23 @@ make fmt                 # gofmt -s -w
 
 Go 1.22+ is required; CI matrixes 1.22 / 1.23 / 1.24. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exactly what CI runs.
 
+### Smoke test
+
+`scripts/dev-smoke.sh` runs a throwaway fleet for trying the simulator and the web UI by hand: 3 instances on 127.0.0.1-3 with 3 devices each (SSH ports 23000-23002, login `admin` / `admin`), already on the `data/` build layout, two sample testbenches that fit it, and `rcfg-sim-ui` on `127.0.0.1:18080`. It needs no root and no systemd: a stand-in `systemctl` starts and stops the processes. Everything lives under `$S` (default `/tmp/rcfg-smoke`) and it only ever touches processes started from `$S`. It works from any checkout.
+
+```bash
+make build                         # the script runs this checkout's bin/
+scripts/dev-smoke.sh start         # set up $S on first use, start the instances and the UI,
+                                   # and print the UI login (kept in $S/ui-login)
+scripts/dev-smoke.sh traffic       # SSH sessions to every device in a loop, so Activity,
+                                   # run totals and last-seen have data; Ctrl-C ends it
+scripts/dev-smoke.sh status        # what is running
+scripts/dev-smoke.sh stop          # stop the UI, the instances and any traffic loop; keeps $S
+scripts/dev-smoke.sh clean         # stop, then delete $S
+```
+
+Run `traffic` in a second terminal, or in the background with `setsid scripts/dev-smoke.sh traffic >/dev/null 2>&1 &`; `stop` ends it either way. To reach the UI from another machine, start it on a private address, for example `UI_ADDR=10.1.1.2:18080 scripts/dev-smoke.sh start`, or tunnel with `ssh -L 18080:127.0.0.1:18080 <host>`. The devices listen on loopback, so SSH to them from the host itself: `ssh -p 23000 admin@127.0.0.1`.
+
 ## Pull request workflow
 
 1. **Open an issue first** for anything beyond a typo or a one-line bug fix. This lets us agree on direction before you spend time.

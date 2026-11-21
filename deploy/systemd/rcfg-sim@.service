@@ -1,7 +1,9 @@
 [Unit]
 Description=rConfig SSH simulator (instance %i)
 Documentation=file:///opt/rcfg-sim/README.md
-After=network-online.target
+# rcfg-sim-aliases.service (written by `make setup`) brings up the IP
+# aliases at boot; ordering after it is harmless where it does not exist.
+After=network-online.target rcfg-sim-aliases.service
 Wants=network-online.target
 
 # StartLimit* live in [Unit] on systemd >= 230. Cap restart-storming on a
@@ -41,7 +43,8 @@ Environment=FAULT_RATES=
 Environment=DEVICE_PROFILES=
 Environment=PROFILE_SEED=42
 Environment=LOG_LEVEL=info
-Environment=ADMIN=false
+Environment=ADMIN_ADDR=
+Environment=ALLOW_EMPTY=false
 
 # Per-instance config: /etc/rcfg-sim/10.50.0.1.env supplies LISTEN_IP,
 # PORT_START, etc. See /opt/rcfg-sim/deploy/systemd/rcfg-sim-instance.env.sample.
@@ -66,12 +69,13 @@ ExecStart=/opt/rcfg-sim/bin/rcfg-sim \
     --max-session=${MAX_SESSION} \
     --active-devices=${ACTIVE_DEVICES} \
     --commands-root=${COMMANDS_ROOT} \
+    --allow-empty=${ALLOW_EMPTY} \
     --fault-rate=${FAULT_RATE} \
     --fault-types=${FAULT_TYPES} \
     --fault-rates=${FAULT_RATES} \
     --device-profiles=${DEVICE_PROFILES} \
     --profile-seed=${PROFILE_SEED} \
-    --admin=${ADMIN} \
+    --admin-addr=${ADMIN_ADDR} \
     --log-level=${LOG_LEVEL}
 
 # rcfg-sim binds PORT_COUNT listeners (default 2500) plus up to MAX_SESSIONS
