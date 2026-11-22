@@ -236,7 +236,7 @@ func Layout(p Page) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</div></div></header><div class=\"flex flex-col md:flex-row\"><nav class=\"overflow-x-auto [scrollbar-width:thin] border-b border-line p-2 md:sticky md:top-14 md:h-[calc(100vh-3.5rem)] md:w-44 md:shrink-0 md:overflow-visible md:border-r md:border-b-0 md:p-3\" aria-label=\"Main\"><ul class=\"flex gap-1 md:flex-col\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</div></div></header><div class=\"flex flex-col md:flex-row\"><nav class=\"overflow-x-auto [scrollbar-width:thin] border-b border-line p-2 md:sticky md:top-15 md:h-[calc(100vh-3.75rem)] md:w-44 md:shrink-0 md:overflow-visible md:border-r md:border-b-0 md:p-3\" aria-label=\"Main\"><ul class=\"flex gap-1 md:flex-col\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
