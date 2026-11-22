@@ -153,7 +153,7 @@ func TestScenarioTestbench(t *testing.T) {
 			t.Errorf("unused card missing %q", want)
 		}
 	}
-	if !strings.Contains(page, "1 / 1 instances up") {
+	if !strings.Contains(page, `1 / 1<span class="collapse-text"> instances up</span>`) {
 		t.Error("the health pill counts the unused instance")
 	}
 	if body := be.post("/fleet/instances/127.0.0.2/start", nil); !strings.Contains(body, "not used by this testbench") {

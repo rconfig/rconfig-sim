@@ -122,8 +122,8 @@ func TestDevicesExportAndBasic(t *testing.T) {
 		t.Fatalf("basic failure not counted: %d", n)
 	}
 	// Exporting ticks the checklist.
-	if !strings.Contains(be.get("/checklist"), "line-through\">Export the devices") {
-		t.Fatal("checklist export tick")
+	if cl := be.get("/checklist"); !strings.Contains(cl, `class="text-muted">Export the devices (CSV or JSON)<span class="sr-only"> (done)</span>`) {
+		t.Fatalf("checklist export tick:\n%s", cl)
 	}
 }
 

@@ -224,6 +224,15 @@ templ CountRow(c Count) {
 	</div>
 }
 
+// Collapse is a control's label that shrinks to its icon on narrower
+// screens: below xl, or below 2xl when late is set. The text stays for
+// screen readers, so the control's accessible name is the same at every
+// width.
+templ Collapse(icon, text string, late bool) {
+	<span class={ templ.KV("collapse-icon", !late), templ.KV("collapse-icon-late", late) } aria-hidden="true">{ icon }</span>
+	<span class={ templ.KV("collapse-text", !late), templ.KV("collapse-text-late", late) }>{ text }</span>
+}
+
 // Badge is a small label (9.6).
 templ Badge(kind, text string) {
 	<span class={ "badge", "badge-" + kind }>{ text }</span>

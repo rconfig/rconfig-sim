@@ -430,7 +430,7 @@ func scenarioDetail(d ScenarioDetail) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "<dl class=\"mt-5 grid grid-cols-[10rem_1fr] gap-x-3 gap-y-1\"><dt class=\"text-muted\">Login</dt><dd>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "<dl class=\"mt-5 grid grid-cols-[10rem_minmax(0,1fr)] gap-x-3 gap-y-1\"><dt class=\"text-muted\">Login</dt><dd>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

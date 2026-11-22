@@ -112,7 +112,7 @@ templ scenarioDetail(d ScenarioDetail) {
 				}
 			</tbody>
 		}
-		<dl class="mt-5 grid grid-cols-[10rem_1fr] gap-x-3 gap-y-1">
+		<dl class="mt-5 grid grid-cols-[10rem_minmax(0,1fr)] gap-x-3 gap-y-1">
 			<dt class="text-muted">Login</dt><dd>{ d.Auth }</dd>
 			<dt class="text-muted">SSH login</dt><dd class="num">{ d.SSHAuth }</dd>
 			if len(d.Behaviour) > 0 {

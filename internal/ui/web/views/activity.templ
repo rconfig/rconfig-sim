@@ -8,7 +8,7 @@ import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
 // event and dropped messages from the same connection.
 templ ActivityPage(p Page) {
 	@Layout(p) {
-		<div class="flex items-baseline justify-between gap-4">
+		<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 			<h1 class="text-2xl">Activity</h1>
 			<p class="text-muted">Live while this page is open. Nothing is stored beyond the 10-minute chart window.</p>
 		</div>
@@ -112,7 +112,7 @@ templ DevicePanel(m DeviceModel) {
 			</h3>
 			<p class="num text-xs text-muted">{ m.IP }:{ itoa(m.Port) } · instance { m.Instance }</p>
 		</div>
-		<dl class="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1">
+		<dl class="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1">
 			<dt class="text-muted">State</dt>
 			<dd class="flex items-center gap-1.5"><span class={ "inline-block size-3 rounded-sm border border-line", m.StateClass } aria-hidden="true"></span>{ m.State }</dd>
 			<dt class="text-muted">Last seen</dt>

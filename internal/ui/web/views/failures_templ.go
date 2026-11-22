@@ -46,7 +46,7 @@ func FailuresPage(p Page, m FailuresModel) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex items-baseline justify-between gap-4\"><h1 class=\"text-2xl\">Failures</h1><p class=\"text-muted\">The same faults and profiles go to every instance. Changes apply to new sessions.</p></div><div class=\"mt-4\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1\"><h1 class=\"text-2xl\">Failures</h1><p class=\"text-muted\">The same faults and profiles go to every instance. Changes apply to new sessions.</p></div><div class=\"mt-4\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

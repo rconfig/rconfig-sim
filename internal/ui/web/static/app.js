@@ -3,20 +3,33 @@
 (function () {
   "use strict";
 
-  // Theme toggle: buttons with data-theme-set.
+  // Theme toggle: buttons with data-theme-set (wide screens), or one
+  // data-theme-cycle button that steps dark, light, auto (narrow screens).
+  var themes = ["dark", "light", "auto"];
+  var themeGlyph = { dark: "☾", light: "☀", auto: "◐" };
   function markTheme() {
     var cur = document.documentElement.getAttribute("data-theme");
     document.querySelectorAll("[data-theme-set]").forEach(function (b) {
       b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-set") === cur));
     });
+    document.querySelectorAll("[data-theme-cycle]").forEach(function (b) {
+      var g = b.querySelector("[data-theme-glyph]"), n = b.querySelector("[data-theme-name]");
+      if (g) g.textContent = themeGlyph[cur] || themeGlyph.dark;
+      if (n) n.textContent = "Theme: " + cur + ". Change theme";
+    });
   }
-  document.addEventListener("click", function (e) {
-    var b = e.target.closest("[data-theme-set]");
-    if (!b) return;
-    var t = b.getAttribute("data-theme-set");
+  function setTheme(t) {
     document.documentElement.setAttribute("data-theme", t);
     try { localStorage.setItem("rcfg-sim-ui-theme", t); } catch (err) {}
     markTheme();
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-theme-set]");
+    if (b) { setTheme(b.getAttribute("data-theme-set")); return; }
+    b = e.target.closest("[data-theme-cycle]");
+    if (!b) return;
+    var i = themes.indexOf(document.documentElement.getAttribute("data-theme"));
+    setTheme(themes[(i + 1) % themes.length]);
   });
 
   // Keep a slider and its number input in step: <input type=range

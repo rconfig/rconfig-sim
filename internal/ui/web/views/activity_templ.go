@@ -44,7 +44,7 @@ func ActivityPage(p Page) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex items-baseline justify-between gap-4\"><h1 class=\"text-2xl\">Activity</h1><p class=\"text-muted\">Live while this page is open. Nothing is stored beyond the 10-minute chart window.</p></div><div hx-ext=\"sse\" sse-connect=\"/activity/stream\" id=\"activity\" class=\"mt-6 flex flex-col gap-6\"><div sse-swap=\"summary\" hx-swap=\"innerHTML\" aria-live=\"off\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1\"><h1 class=\"text-2xl\">Activity</h1><p class=\"text-muted\">Live while this page is open. Nothing is stored beyond the 10-minute chart window.</p></div><div hx-ext=\"sse\" sse-connect=\"/activity/stream\" id=\"activity\" class=\"mt-6 flex flex-col gap-6\"><div sse-swap=\"summary\" hx-swap=\"innerHTML\" aria-live=\"off\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -530,7 +530,7 @@ func DevicePanel(m DeviceModel) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "</p></div><dl class=\"grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1\"><dt class=\"text-muted\">State</dt><dd class=\"flex items-center gap-1.5\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "</p></div><dl class=\"grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1\"><dt class=\"text-muted\">State</dt><dd class=\"flex items-center gap-1.5\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

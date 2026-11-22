@@ -44,7 +44,7 @@ func FleetPage(p Page, m FleetModel) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex items-baseline justify-between gap-4\"><h1 class=\"text-2xl\">Fleet</h1><p class=\"text-muted\">Changes apply to new sessions and are saved to each instance's env file.</p></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1\"><h1 class=\"text-2xl\">Fleet</h1><p class=\"text-muted\">Changes apply to new sessions and are saved to each instance's env file.</p></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -166,7 +166,7 @@ func FleetCards(m FleetModel, oob bool) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<div class=\"grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(18rem,1fr))]\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<div class=\"grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(18rem,100%),1fr))]\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -213,7 +213,7 @@ func card(v fleet.View) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<div class=\"flex items-start justify-between gap-2\"><div><h2 class=\"num text-base\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 10, "<div class=\"flex items-start justify-between gap-2\"><div class=\"min-w-0\"><h2 class=\"num text-base\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -314,7 +314,7 @@ func card(v fleet.View) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</span></div><svg class=\"mt-1 h-1.5 w-full\" viewBox=\"0 0 100 4\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><rect width=\"100\" height=\"4\" class=\"fill-panel-2\"></rect> <rect width=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</span></div><svg class=\"mt-1 h-1.5 w-full\" viewBox=\"0 0 100 4\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><rect width=\"100\" height=\"4\" class=\"fill-line\"></rect> <rect width=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -327,7 +327,7 @@ func card(v fleet.View) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\" height=\"4\" class=\"fill-st-active\"></rect></svg></div><div class=\"flex items-center justify-between gap-3 text-xs\"><span class=\"text-muted\">Active devices <span class=\"num text-fg\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "\" height=\"4\" class=\"fill-st-active\"></rect></svg></div><div class=\"flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs\"><span class=\"text-muted\">Active devices <span class=\"num text-fg\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -371,14 +371,14 @@ func card(v fleet.View) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if len(v.Drift) > 0 {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<div class=\"flex items-center justify-between gap-2 rounded-md border border-st-auth px-2 py-1.5 text-xs\"><span><span class=\"font-semibold text-st-auth\">Drift</span> env file differs: ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<div class=\"flex flex-wrap items-center justify-between gap-2 rounded-md border border-st-auth px-2 py-1.5 text-xs\"><span class=\"min-w-0\"><span class=\"font-semibold text-st-auth\">Drift</span> env file differs: ")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var19 string
 					templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(joinComma(v.Drift))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `fleet.templ`, Line: 84, Col: 103}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `fleet.templ`, Line: 84, Col: 119}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 					if templ_7745c5c3_Err != nil {
@@ -479,14 +479,14 @@ func card(v fleet.View) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "</p></div><svg class=\"h-7 w-32\" viewBox=\"0 0 120 28\" aria-label=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "</p></div><svg class=\"h-7 w-32 min-w-0 shrink\" viewBox=\"0 0 120 28\" aria-label=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templruntime.NewAttributeExpression("bytes per second, last " + itoa(len(v.BytesPS)) + " polls").Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `fleet.templ`, Line: 101, Col: 118}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `fleet.templ`, Line: 101, Col: 133}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 			if templ_7745c5c3_Err != nil {
@@ -505,7 +505,7 @@ func card(v fleet.View) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "\" fill=\"none\" class=\"stroke-accent-500\" stroke-width=\"1.5\" vector-effect=\"non-scaling-stroke\"></polyline></svg></div><div class=\"flex gap-2 border-t border-line pt-3\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "\" fill=\"none\" class=\"stroke-accent-500\" stroke-width=\"1.5\" vector-effect=\"non-scaling-stroke\"></polyline></svg></div><div class=\"flex flex-wrap gap-2 border-t border-line pt-3\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1086,7 +1086,7 @@ func capsForm(m FleetModel) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			for _, v := range upViews(m.Views) {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "<div class=\"grid grid-cols-[9rem_auto] items-center gap-3\"><label for=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "<div class=\"grid grid-cols-[minmax(0,9rem)_minmax(0,8rem)] items-center gap-3\"><label for=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

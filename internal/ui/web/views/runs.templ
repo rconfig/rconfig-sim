@@ -83,7 +83,7 @@ templ RunPage(p Page, m RunModel) {
 	@Layout(p) {
 		<div class="flex flex-wrap items-baseline justify-between gap-4">
 			<h1 class="text-2xl">{ m.Row.Name } <span class="num text-sm text-muted">v{ itoa(m.Row.Version) } · run { m.Row.ID }</span></h1>
-			<div class="flex gap-2">
+			<div class="flex flex-wrap gap-2">
 				@ui.LinkButton(ui.Secondary, "", "/devices?run="+m.Row.ID, nil) {
 					Devices
 				}
@@ -95,7 +95,7 @@ templ RunPage(p Page, m RunModel) {
 				}
 			</div>
 		</div>
-		<dl class="mt-4 grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1">
+		<dl class="mt-4 grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1">
 			<dt class="text-muted">Started</dt><dd class="num">{ m.Row.Started }</dd>
 			<dt class="text-muted">Ended</dt><dd class="num">{ orDash(m.Row.Ended) }</dd>
 			<dt class="text-muted">Duration</dt><dd class="num">{ m.Row.Duration }</dd>
@@ -134,7 +134,7 @@ templ RunPage(p Page, m RunModel) {
 			@panel("Timeline", "") {
 				<ol class="flex flex-col gap-1">
 					for _, e := range m.Events {
-						<li class="grid grid-cols-[9rem_6rem_minmax(0,1fr)] gap-2"><span class="num text-muted">{ e.At }</span><span class="text-muted">{ e.Kind }</span><span>{ e.Text }</span></li>
+						<li class="grid grid-cols-[minmax(0,9rem)_minmax(0,6rem)_minmax(0,1fr)] gap-2"><span class="num text-muted">{ e.At }</span><span class="text-muted">{ e.Kind }</span><span>{ e.Text }</span></li>
 					}
 				</ol>
 			}

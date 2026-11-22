@@ -97,7 +97,7 @@ templ DevicesPage(p Page, m DevicesModel, sorts []SortLink, exportCSV, exportJSO
 				}
 			</div>
 			if m.Pages > 1 {
-				<nav class="mt-3 flex items-center gap-3 text-xs" aria-label="Pages">
+				<nav class="mt-3 flex flex-wrap items-center gap-3 text-xs" aria-label="Pages">
 					if m.Page > 1 {
 						<a href={ templ.SafeURL(pageHref(m.Query, m.Page-1)) }>Previous</a>
 					}
@@ -198,7 +198,7 @@ templ DeviceDrawer(m DeviceDrawerModel) {
 					}
 				</p>
 			</div>
-			<dl class="mt-3 grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1 text-xs">
+			<dl class="mt-3 grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
 				<dt class="text-muted">Address</dt><dd class="num">{ m.Row.IP }:{ itoa(m.Row.Port) }</dd>
 				<dt class="text-muted">Instance</dt><dd class="num">{ orDash(m.Row.Instance) }</dd>
 				<dt class="text-muted">Model</dt><dd class="num">{ m.Row.Model } ({ m.Template })</dd>
@@ -271,24 +271,40 @@ templ LoginTestResult(m LoginTestModel) {
 templ Checklist(m ChecklistModel) {
 	<div id="checklist" hx-get="/checklist" hx-trigger="every 5s" hx-swap="outerHTML" class="mt-6">
 		@ui.Panel(templ.Attributes{"aria-label": "Getting started"}) {
-			<div class="flex items-baseline justify-between gap-3">
-				<h2 class="text-lg">Getting started <span class="num text-sm text-muted">{ itoa(m.Done) } of { itoa(len(m.Items)) }</span></h2>
-				@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"hx-post": "/checklist/dismiss", "hx-target": "#checklist", "hx-swap": "outerHTML"}) {
-					Dismiss
-				}
-			</div>
-			<ul class="mt-3 flex flex-col gap-1">
-				for _, it := range m.Items {
-					<li class="flex items-center gap-2">
-						if it.Done {
-							<span class="text-st-ok" aria-label="done">✓</span>
-						} else {
-							<span class="text-muted" aria-label="not done">○</span>
-						}
-						<a href={ templ.SafeURL(it.Href) } class={ templ.KV("text-muted line-through", it.Done) }>{ it.Text }</a>
-					</li>
-				}
-			</ul>
+			if len(m.Items) > 0 && m.Done == len(m.Items) {
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<p class="flex items-center gap-2">
+						<span class="text-st-ok" aria-hidden="true">✓</span>
+						<span class="font-medium">All set</span>
+						<span class="num text-xs text-muted">{ itoa(m.Done) } of { itoa(len(m.Items)) } done</span>
+					</p>
+					@checklistDismiss()
+				</div>
+			} else {
+				<div class="flex flex-wrap items-baseline justify-between gap-3">
+					<h2 class="text-lg">Getting started <span class="num text-sm text-muted">{ itoa(m.Done) } of { itoa(len(m.Items)) }</span></h2>
+					@checklistDismiss()
+				</div>
+				<ul class="mt-3 flex flex-col gap-1">
+					for _, it := range m.Items {
+						<li class="flex items-center gap-2">
+							if it.Done {
+								<span class="w-4 text-center text-st-ok" aria-hidden="true">✓</span>
+								<a href={ templ.SafeURL(it.Href) } class="text-muted">{ it.Text }<span class="sr-only">{ " (done)" }</span></a>
+							} else {
+								<span class="w-4 text-center text-muted" aria-hidden="true">○</span>
+								<a href={ templ.SafeURL(it.Href) }>{ it.Text }</a>
+							}
+						</li>
+					}
+				</ul>
+			}
 		}
 	</div>
+}
+
+templ checklistDismiss() {
+	@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"hx-post": "/checklist/dismiss", "hx-target": "#checklist", "hx-swap": "outerHTML"}) {
+		Dismiss
+	}
 }

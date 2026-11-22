@@ -916,6 +916,43 @@ func benchPillKind(state string) string {
 	return "neutral"
 }
 
+// benchPillGlyph is the pill's icon when the header collapses (below lg);
+// its text stays for screen readers and in the title.
+func benchPillGlyph(state string) string {
+	switch state {
+	case "running":
+		return "▶"
+	case "starting":
+		return "◔"
+	case "stopping":
+		return "◼"
+	case "failed":
+		return "!"
+	}
+	return "●"
+}
+
+// benchPillText is the pill's label: name, state, elapsed and time left.
+func benchPillText(b BenchPill) string {
+	s := b.Name + " · " + b.State
+	if b.Elapsed != "" {
+		s += " · " + b.Elapsed
+	}
+	if b.StopIn != "" {
+		s += " · stops in " + b.StopIn
+	}
+	return s
+}
+
+// benchPillTitle is the pill's hover text: the error when it failed, else
+// its full label (the label is truncated or an icon on narrow screens).
+func benchPillTitle(b BenchPill) string {
+	if b.Error != "" {
+		return b.Error
+	}
+	return benchPillText(b)
+}
+
 // benchRunHref is where the pill's name goes: the running run, else the
 // Testbenches list.
 func benchRunHref(b BenchPill) string {

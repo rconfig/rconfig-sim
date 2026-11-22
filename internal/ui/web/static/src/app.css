@@ -167,8 +167,18 @@
     outline-offset: 2px;
   }
   ::selection { background: color-mix(in srgb, var(--color-accent-500) 35%, transparent); }
-  input[type="range"] { accent-color: var(--color-accent-500); }
+  input[type="range"] { accent-color: var(--color-accent-500); min-width: 0; }
   input[type="checkbox"] { accent-color: var(--color-accent-600); }
+
+  /* Nothing may push the page wider than the window (390px to 2560px).
+     A grid with no column template gets one auto column, which never
+     shrinks below its content; make implicit columns shrinkable. A
+     fieldset's UA min-width is min-content; drop it. Long tokens (paths,
+     hostnames, flag strings) in page text break rather than overflow;
+     tables keep whole words and scroll inside their own wrapper. */
+  :where(*) { grid-auto-columns: minmax(0, 1fr); }
+  fieldset { min-inline-size: 0; }
+  main { overflow-wrap: anywhere; }
 }
 
 @layer components {
@@ -210,10 +220,12 @@
     @apply hidden size-3 rounded-full border-2 border-current border-r-transparent;
     animation: spin 0.8s linear infinite;
   }
-  .htmx-request .btn-spinner, .btn.htmx-request .btn-spinner { display: inline-block; }
+  /* Only the button that made the request (or a submitting form's submit
+     button) spins; a polling ancestor must not light up every button in it. */
+  .btn.htmx-request .btn-spinner, form.htmx-request .btn[type="submit"] .btn-spinner { display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .card { @apply rounded-card border border-line bg-panel p-5; }
+  .card { @apply min-w-0 rounded-card border border-line bg-panel p-5; }
   .card-title { @apply text-lg; }
   .card-help { @apply mt-1 text-muted; }
   .card-body { @apply mt-4; }
@@ -221,7 +233,7 @@
   .field { @apply flex flex-col gap-1; }
   .field-label { @apply flex items-center gap-1.5; }
   .field-hint { @apply text-xs text-muted; }
-  .input { @apply rounded-md border border-line bg-bg px-2 py-1 text-fg; }
+  .input { @apply max-w-full min-w-0 rounded-md border border-line bg-bg px-2 py-1 text-fg; }
   .check { @apply inline-flex items-center gap-2; }
 
   .help { @apply relative inline-block; }
@@ -230,7 +242,10 @@
   }
   .help > summary::-webkit-details-marker { display: none; }
   .help-text {
-    @apply absolute left-0 top-5 z-30 block w-72 rounded-md border border-line bg-panel p-2 text-xs font-normal text-fg shadow-sm;
+    @apply absolute left-0 top-5 z-30 block w-72 max-w-[calc(100vw-2rem)] rounded-md border border-line bg-panel p-2 text-xs font-normal text-fg shadow-sm;
+    /* On phones the ? can sit near the right edge: span the screen
+       instead, just below the ?, so an open help never widens the page. */
+    @apply max-sm:fixed max-sm:inset-x-4 max-sm:top-auto max-sm:w-auto max-sm:max-w-none;
   }
 
   .slider { @apply grid items-center gap-3 sm:grid-cols-[minmax(0,1fr)_auto]; }
@@ -257,7 +272,7 @@
   .choice-desc { @apply text-xs text-muted; }
   .choice-badges { @apply flex flex-wrap gap-1; }
 
-  .segmented-group { @apply flex flex-col gap-1; }
+  .segmented-group { @apply flex flex-col items-start gap-1; }
   .segmented { @apply inline-flex flex-wrap rounded-md border border-line p-0.5; }
   .segment { @apply cursor-pointer rounded px-3 py-1 text-muted hover:text-fg; }
   .segment:has(input:checked) { @apply bg-tint text-fg; }
@@ -289,8 +304,8 @@
   .badge-ok { @apply border-st-ok text-st-ok; }
   .badge-info { @apply border-st-active text-st-active; }
 
-  .summary { @apply text-muted; }
-  .actions { @apply mt-2 flex flex-col items-end gap-2 border-t border-line pt-4 text-right; }
+  .summary { @apply max-w-full text-muted; }
+  .actions { @apply mt-2 flex min-w-0 flex-col items-end gap-2 border-t border-line pt-4 text-right; }
   .actions-buttons { @apply flex flex-wrap justify-end gap-3; }
 
   .advanced { @apply rounded-md border border-line; }
@@ -301,25 +316,34 @@
   .empty-title { @apply font-medium; }
   .empty-text { @apply text-muted; }
 
-  .toast { @apply mb-4 flex items-start gap-3 rounded-card border border-l-4 border-line bg-panel px-4 py-3; }
+  .toast { @apply mb-4 flex min-w-0 items-start gap-3 rounded-card border border-l-4 border-line bg-panel px-4 py-3; }
   .toast-ok { @apply border-l-st-ok; }
   .toast-warn { @apply border-l-st-auth; }
   .toast-error { @apply border-l-st-error; }
   .toast-lines { @apply mt-1 list-disc pl-5 text-muted; }
 
   .table-wrap { @apply overflow-x-auto rounded-card border border-line bg-panel; }
-  .table { @apply w-full text-left text-xs; }
+  .table { @apply w-full text-left text-xs; overflow-wrap: normal; }
   .table thead { @apply border-b border-line text-muted; }
   .table th { @apply px-3 py-2 font-medium; }
   .table td { @apply px-3 py-1.5; }
   .table tbody tr { @apply border-b border-line last:border-0; }
 
-  .pill { @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .pill { @apply inline-flex min-w-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs whitespace-nowrap; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   .pill-neutral { @apply border-line text-muted; }
   .pill-ok { @apply border-st-ok text-st-ok; }
   .pill-warn { @apply border-st-auth text-st-auth; }
   .pill-active { @apply border-st-active text-st-active; }
   .pill-error { @apply border-st-error text-st-error; }
+
+  /* Collapse (header): below xl a control shows only its icon (below 2xl
+     for the -late pair, used by the testbench pill's actions, the widest
+     part of the header). The text stays for screen readers, so the
+     accessible name never changes. */
+  .collapse-icon { @apply xl:hidden; }
+  .collapse-text { @apply max-xl:sr-only; }
+  .collapse-icon-late { @apply 2xl:hidden; }
+  .collapse-text-late { @apply max-2xl:sr-only; }
 
   .code { @apply max-h-[28rem] overflow-auto rounded-md border border-line bg-bg p-3 text-xs; font-family: var(--font-mono); }
 }

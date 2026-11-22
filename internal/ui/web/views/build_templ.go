@@ -42,7 +42,7 @@ func BuildPage(p Page, m BuildModel) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex items-baseline justify-between gap-4\"><h1 class=\"text-2xl\">Build</h1><p class=\"text-muted\">Regenerates every device config, then restarts the fleet one instance at a time.</p></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1\"><h1 class=\"text-2xl\">Build</h1><p class=\"text-muted\">Regenerates every device config, then restarts the fleet one instance at a time.</p></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -258,7 +258,7 @@ func liveBuild(m BuildModel) templ.Component {
 			}
 			ctx = templ.InitializeContext(ctx)
 			if m.Live != nil {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<dl class=\"grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1\"><dt class=\"text-muted\">Build</dt><dd class=\"num\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<dl class=\"grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1\"><dt class=\"text-muted\">Build</dt><dd class=\"num\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -828,7 +828,7 @@ func EstimatePanel(m EstimateModel) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if m.Disk != "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<dl class=\"grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1\"><dt class=\"text-muted\">Disk</dt><dd class=\"num\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 56, "<dl class=\"grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1\"><dt class=\"text-muted\">Disk</dt><dd class=\"num\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

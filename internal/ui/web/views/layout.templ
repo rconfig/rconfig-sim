@@ -5,6 +5,11 @@ import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
 // Layout is the shell of every page: header with the logo, the active
 // testbench pill, device search, fleet health, the theme toggle and log
 // out (section 10); the left rail; the pending-changes bar and flash area.
+//
+// The header is one row at every width: below xl the pills, the theme
+// toggle and Log out collapse to icons and the search shrinks, so nothing
+// is pushed off-screen or wraps under it. Below md the rail becomes a strip
+// under the header that scrolls sideways on its own; the page never does.
 templ Layout(p Page) {
 	<!DOCTYPE html>
 	<html lang="en" data-theme="dark">
@@ -27,40 +32,44 @@ templ Layout(p Page) {
 		</head>
 		<body class="min-h-screen text-sm">
 			<header class="brand-hairline sticky top-0 z-20 border-b border-line bg-panel">
-				<div class="flex h-14 items-center gap-4 px-4">
-					<a href="/" class="flex items-center" aria-label="Sim by rConfig: fleet">
-						<img class="logo-dark h-8 w-auto" src="/static/img/sim-logo-white.svg" alt="Sim by rConfig"/>
-						<img class="logo-light h-8 w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
+				<div class="flex h-14 min-w-0 items-center gap-2 px-3 sm:gap-4 sm:px-4">
+					<a href="/" class="flex shrink-0 items-center" aria-label="Sim by rConfig: fleet">
+						<img class="logo-dark h-8 w-8 object-cover object-left sm:w-auto" src="/static/img/sim-logo-white.svg" alt="Sim by rConfig"/>
+						<img class="logo-light h-8 w-8 object-cover object-left sm:w-auto" src="/static/img/sim-logo-gradient.svg" alt="Sim by rConfig"/>
 					</a>
 					if p.Bench.State != "" {
 						@BenchPillView(p.Bench)
 					}
-					<div class="ml-auto flex items-center gap-3">
+					<div class="ml-auto flex min-w-0 shrink-0 items-center gap-2 xl:gap-3">
 						if p.User != "" {
-							<form method="get" action="/devices/find" role="search">
-								@ui.Input(templ.Attributes{"name": "q", "placeholder": "Find a hostname", "aria-label": "Find a device by hostname", "class": "num w-44 text-xs"})
+							<form method="get" action="/devices/find" role="search" class="w-24 min-w-12 shrink sm:w-36 xl:w-44">
+								@ui.Input(templ.Attributes{"name": "q", "placeholder": "Find a hostname", "aria-label": "Find a device by hostname", "class": "num w-full text-xs"})
 							</form>
 						}
 						@HealthPill(p.Up, p.Total, false)
-						<div class="segmented" role="group" aria-label="Theme">
+						<div class="segmented hidden shrink-0 flex-nowrap xl:inline-flex" role="group" aria-label="Theme">
 							for _, t := range []string{"dark", "light", "auto"} {
 								@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"data-theme-set": t, "aria-pressed": "false"}) {
 									<span class="capitalize">{ t }</span>
 								}
 							}
 						</div>
+						@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"data-theme-cycle": "", "class": "shrink-0 xl:hidden", "title": "Theme: dark, light or auto"}) {
+							<span data-theme-glyph aria-hidden="true">☾</span>
+							<span class="sr-only" data-theme-name>Theme: dark. Change theme</span>
+						}
 						if p.User != "" {
-							<span class="text-xs text-muted">{ p.User }</span>
-							@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/logout"}) {
-								Log out
+							<span class="hidden text-xs text-muted xl:inline">{ p.User }</span>
+							@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/logout", "class": "shrink-0", "title": "Log out " + p.User}) {
+								@ui.Collapse("⇥", "Log out", false)
 							}
 						}
 					</div>
 				</div>
 			</header>
-			<div class="flex">
-				<nav class="sticky top-14 h-[calc(100vh-3.5rem)] w-44 shrink-0 border-r border-line p-3" aria-label="Main">
-					<ul class="flex flex-col gap-1">
+			<div class="flex flex-col md:flex-row">
+				<nav class="overflow-x-auto [scrollbar-width:thin] border-b border-line p-2 md:sticky md:top-14 md:h-[calc(100vh-3.5rem)] md:w-44 md:shrink-0 md:overflow-visible md:border-r md:border-b-0 md:p-3" aria-label="Main">
+					<ul class="flex gap-1 md:flex-col">
 						@navItem("/fleet", "Fleet", p.Nav == "fleet", true)
 						@navItem("/testbenches", "Testbenches", p.Nav == "testbenches", true)
 						@navItem("/runs", "Runs", p.Nav == "runs", true)
@@ -71,7 +80,7 @@ templ Layout(p Page) {
 						@navItem("/scenarios", "Scenarios", p.Nav == "scenarios", true)
 					</ul>
 				</nav>
-				<main class="min-w-0 flex-1 p-6">
+				<main class="min-w-0 flex-1 p-4 sm:p-6">
 					<div id="pending" class="sticky top-16 z-10" aria-live="polite"></div>
 					<div id="flash" aria-live="polite"></div>
 					{ children... }
@@ -89,10 +98,10 @@ templ navItem(href, label string, current, enabled bool) {
 				if current {
 					aria-current="page"
 				}
-				class={ "block rounded-md px-3 py-2 no-underline", templ.KV("bg-tint text-fg", current), templ.KV("text-muted hover:text-fg", !current) }
+				class={ "block whitespace-nowrap rounded-md px-3 py-2 no-underline", templ.KV("bg-tint text-fg", current), templ.KV("text-muted hover:text-fg", !current) }
 			>{ label }</a>
 		} else {
-			<span class="block cursor-not-allowed px-3 py-2 text-muted opacity-50" title="Not in this release">{ label }</span>
+			<span class="block cursor-not-allowed whitespace-nowrap px-3 py-2 text-muted opacity-50" title="Not in this release">{ label }</span>
 		}
 	</li>
 }
@@ -105,9 +114,10 @@ templ HealthPill(up, total int, oob bool) {
 		if oob {
 			hx-swap-oob="true"
 		}
-		class={ "num rounded-full border px-2.5 py-0.5 text-xs", templ.KV("border-st-ok text-st-ok", total > 0 && up == total), templ.KV("border-st-auth text-st-auth", up < total) }
+		class={ "num shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs", templ.KV("border-st-ok text-st-ok", total > 0 && up == total), templ.KV("border-st-auth text-st-auth", up < total) }
+		title={ itoa(up) + " of " + itoa(total) + " instances up" }
 	>
-		{ itoa(up) } / { itoa(total) } instances up
+		{ itoa(up) } / { itoa(total) }<span class="collapse-text">{ " instances up" }</span>
 	</span>
 }
 

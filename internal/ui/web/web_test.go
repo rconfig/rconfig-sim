@@ -243,7 +243,7 @@ func TestFleetPageAndCards(t *testing.T) {
 
 	body := e.get("/fleet")
 	for _, want := range []string{"127.0.0.1", "127.0.0.2", "127.0.0.3", ">Up<", ">Down<", ">Admin API off<",
-		"1 / 3 instances up", "ADMIN_ADDR", "<span class=\"num font-semibold\">inactive</span>", `hx-get="/fleet/cards"`} {
+		`1 / 3<span class="collapse-text"> instances up</span>`, "ADMIN_ADDR", "<span class=\"num font-semibold\">inactive</span>", `hx-get="/fleet/cards"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("fleet page missing %q", want)
 		}
@@ -488,7 +488,7 @@ func TestLayoutRender(t *testing.T) {
 		`src="/static/vendor/htmx-2.0.11.min.js"`, `src="/static/theme.js"`,
 		`class="brand-hairline`, `id="pending"`, `id="flash"`,
 		`data-theme-set="dark"`, `data-theme-set="light"`, `data-theme-set="auto"`,
-		`class="logo-dark`, `class="logo-light`, `aria-current="page"`, "2 / 3 instances up",
+		`class="logo-dark`, `class="logo-light`, `aria-current="page"`, `2 / 3<span class="collapse-text"> instances up</span>`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("layout missing %q", want)

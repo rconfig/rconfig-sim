@@ -6,44 +6,44 @@ import ui "github.com/rcfg-sim/rcfg-sim/internal/ui/web/views/components"
 // name opens the running run; the devices link opens the run's Devices
 // view. It refreshes itself every few seconds.
 templ BenchPillView(b BenchPill) {
-	<div id="bench-pill" hx-get="/bench/pill" hx-trigger="every 3s, bench-changed from:body" hx-swap="outerHTML" class="flex items-center gap-2">
+	<div id="bench-pill" hx-get="/bench/pill" hx-trigger="every 3s, bench-changed from:body" hx-swap="outerHTML" class="-m-1 flex min-w-0 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] xl:gap-2">
 		if b.State != "" && b.State != "idle" {
-			@ui.PillLink(benchPillKind(b.State), benchRunHref(b), templ.Attributes{"title": b.Error}) {
-				{ b.Name } · { b.State }
-				if b.Elapsed != "" {
-					· { b.Elapsed }
-				}
-				if b.StopIn != "" {
-					· stops in { b.StopIn }
-				}
+			@ui.PillLink(benchPillKind(b.State), benchRunHref(b), templ.Attributes{"title": benchPillTitle(b), "class": "shrink-0 xl:min-w-32 xl:shrink"}) {
+				<span class="collapse-icon" aria-hidden="true">{ benchPillGlyph(b.State) }</span>
+				<span class="collapse-text min-w-0 xl:truncate">{ benchPillText(b) }</span>
 			}
 			if b.RunID != "" {
-				@ui.LinkButton(ui.Ghost, ui.Small, "/devices?run="+b.RunID, templ.Attributes{"aria-label": "Devices of this run", "title": "Devices of this run"}) {
+				@ui.LinkButton(ui.Ghost, ui.Small, "/devices?run="+b.RunID, templ.Attributes{"aria-label": "Devices of this run", "title": "Devices of this run", "class": "shrink-0"}) {
 					<span aria-hidden="true">▦</span>
 				}
 			}
 			if b.Modified {
-				@ui.Badge(ui.BadgeWarn, "modified")
-				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/save", "hx-target": "#flash", "hx-confirm": "Save the fleet's current settings into this testbench (a new version)?"}) {
-					Save to testbench
+				<span class="collapse-text shrink-0">
+					@ui.Badge(ui.BadgeWarn, "modified")
+				</span>
+				<span class="collapse-icon shrink-0" title="modified">
+					@ui.Badge(ui.BadgeWarn, "*")
+				</span>
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/save", "hx-target": "#flash", "hx-confirm": "Save the fleet's current settings into this testbench (a new version)?", "class": "shrink-0", "title": "Save to testbench"}) {
+					@ui.Collapse("↧", "Save to testbench", true)
 				}
-				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/revert", "hx-target": "#flash", "hx-confirm": "Undo the changes made during this run and re-apply the testbench's settings?"}) {
-					Revert
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/revert", "hx-target": "#flash", "hx-confirm": "Undo the changes made during this run and re-apply the testbench's settings?", "class": "shrink-0", "title": "Revert"}) {
+					@ui.Collapse("↶", "Revert", true)
 				}
 			}
 			if b.State == "running" {
-				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/restart", "hx-target": "#flash", "hx-confirm": "Restart every instance, one at a time, with the same testbench?"}) {
-					Restart
+				@ui.Button(ui.Secondary, ui.Small, templ.Attributes{"hx-post": "/bench/restart", "hx-target": "#flash", "hx-confirm": "Restart every instance, one at a time, with the same testbench?", "class": "shrink-0", "title": "Restart"}) {
+					@ui.Collapse("↻", "Restart", true)
 				}
 			}
 			if b.State == "running" || b.State == "failed" {
-				@ui.ConfirmButton("Stop every instance and end this run?", ui.Small, templ.Attributes{"hx-post": "/bench/stop", "hx-target": "#flash"}) {
-					Stop
+				@ui.ConfirmButton("Stop every instance and end this run?", ui.Small, templ.Attributes{"hx-post": "/bench/stop", "hx-target": "#flash", "class": "shrink-0", "title": "Stop"}) {
+					@ui.Collapse("■", "Stop", true)
 				}
 			}
 			if b.State == "failed" {
-				@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"hx-post": "/bench/dismiss", "hx-target": "#flash"}) {
-					Dismiss
+				@ui.Button(ui.Ghost, ui.Small, templ.Attributes{"hx-post": "/bench/dismiss", "hx-target": "#flash", "class": "shrink-0", "title": "Dismiss"}) {
+					@ui.Collapse("×", "Dismiss", true)
 				}
 			}
 		}
@@ -216,7 +216,7 @@ templ FlowPage(p Page, m FlowModel) {
 					New testbench
 				}
 			</h1>
-			<div class="flex gap-2">
+			<div class="flex flex-wrap gap-2">
 				if m.Editing {
 					@ui.LinkButton(ui.Secondary, "", "/devices?testbench="+m.Slug, nil) {
 						Devices
